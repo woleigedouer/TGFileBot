@@ -35,7 +35,7 @@ RUN apk --no-cache add ca-certificates tzdata
 COPY --from=builder /tgfilebot/tgfilebot .
 
 # 确保配置文件和目录存在
-RUN mkdir -p files && echo -n "[]" > files/blacklist.json
+RUN mkdir -p files && echo -n "[]" > files/whitelist.json
 
 EXPOSE 9981
 

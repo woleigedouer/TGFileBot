@@ -344,8 +344,8 @@ func StartUserBot() error {
 
 func LoadCommands(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("start", handleStart))
-	d.AddHandler(handlers.NewCommand("ban", handleBan))
-	d.AddHandler(handlers.NewCommand("unban", handleUnban))
+	d.AddHandler(handlers.NewCommand("allow", handleAllow))
+	d.AddHandler(handlers.NewCommand("disallow", handleDisallow))
 	d.AddHandler(handlers.NewCommand("phone", handlePhone))
 	d.AddHandler(handlers.NewCommand("code", handleCode))
 	d.AddHandler(handlers.NewCommand("pass", handlePass))
@@ -358,8 +358,8 @@ func isAdmin(userID int64) bool {
 	return len(config.AdminUsers) > 0 && contains(config.AdminUsers, userID)
 }
 
-// /ban 命令：/ban <userID>
-func handleBan(ctx *ext.Context, u *ext.Update) error {
+// /allow 命令：/allow <userID>
+func handleAllow(ctx *ext.Context, u *ext.Update) error {
 	adminID := u.EffectiveChat().GetID()
 	if !isAdmin(adminID) {
 		_, _ = ctx.Reply(u, ext.ReplyTextString("无权执行此命令（仅限管理员）"), nil)
@@ -368,7 +368,7 @@ func handleBan(ctx *ext.Context, u *ext.Update) error {
 
 	args := strings.Fields(strings.TrimSpace(u.EffectiveMessage.Text))
 	if len(args) < 2 {
-		_, _ = ctx.Reply(u, ext.ReplyTextString("用法: /ban <用户ID>"), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString("用法: /allow <用户ID>"), nil)
 		return dispatcher.EndGroups
 	}
 	userID, err := strconv.ParseInt(args[1], 10, 64)
@@ -377,21 +377,21 @@ func handleBan(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	created := blacklist.Ban(userID)
-	if saveErr := blacklist.Save(); saveErr != nil {
-		log.Printf("保存黑名单失败: %v", saveErr)
+	created := whitelist.Add(userID)
+	if saveErr := whitelist.Save(); saveErr != nil {
+		log.Printf("保存白名单失败: %v", saveErr)
 	}
 
 	if created {
-		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("已拉黑: %d", userID)), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("已将用户加入白名单: %d", userID)), nil)
 	} else {
-		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("用户已在黑名单: %d", userID)), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("用户已在白名单中: %d", userID)), nil)
 	}
 	return dispatcher.EndGroups
 }
 
-// /unban 命令：/unban <userID>
-func handleUnban(ctx *ext.Context, u *ext.Update) error {
+// /disallow 命令：/disallow <userID>
+func handleDisallow(ctx *ext.Context, u *ext.Update) error {
 	adminID := u.EffectiveChat().GetID()
 	if !isAdmin(adminID) {
 		_, _ = ctx.Reply(u, ext.ReplyTextString("无权执行此命令（仅限管理员）"), nil)
@@ -400,7 +400,7 @@ func handleUnban(ctx *ext.Context, u *ext.Update) error {
 
 	args := strings.Fields(strings.TrimSpace(u.EffectiveMessage.Text))
 	if len(args) < 2 {
-		_, _ = ctx.Reply(u, ext.ReplyTextString("用法: /unban <用户ID>"), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString("用法: /disallow <用户ID>"), nil)
 		return dispatcher.EndGroups
 	}
 	userID, err := strconv.ParseInt(args[1], 10, 64)
@@ -409,14 +409,14 @@ func handleUnban(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	removed := blacklist.Unban(userID)
-	if saveErr := blacklist.Save(); saveErr != nil {
-		log.Printf("保存黑名单失败: %v", saveErr)
+	removed := whitelist.Remove(userID)
+	if saveErr := whitelist.Save(); saveErr != nil {
+		log.Printf("保存白名单失败: %v", saveErr)
 	}
 	if removed {
-		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("已移出黑名单: %d", userID)), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("已将用户从白名单移出: %d", userID)), nil)
 	} else {
-		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("用户不在黑名单: %d", userID)), nil)
+		_, _ = ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("用户不在白名单中: %d", userID)), nil)
 	}
 	return dispatcher.EndGroups
 }
@@ -598,6 +598,12 @@ func handleStart(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	// 白名单拦截 (包含管理员)
+	if !whitelist.IsAllowed(chatId) {
+		_, _ = ctx.Reply(u, ext.ReplyTextString("您不在白名单中，无法使用该机器人。"), nil)
+		return dispatcher.EndGroups
+	}
+
 	_, err := ctx.Reply(u, ext.ReplyTextString("您好，发送任意文件即可获取该文件的直链。"), nil)
 	if err != nil {
 		log.Printf("发送欢迎消息给用户 %d 失败: %v", chatId, err)
@@ -627,9 +633,9 @@ func handleMessage(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// 黑名单拦截
-	if blacklist.IsBanned(chatId) {
-		_, _ = ctx.Reply(u, ext.ReplyTextString("您已被禁用，无法使用该机器人。"), nil)
+	// 白名单拦截 (包含管理员)
+	if !whitelist.IsAllowed(chatId) {
+		_, _ = ctx.Reply(u, ext.ReplyTextString("您不在白名单中，无法使用该机器人。"), nil)
 		return dispatcher.EndGroups
 	}
 
@@ -1693,17 +1699,17 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 // 黑名单（持久化）
 // ============================================================================
 
-type Blacklist struct {
+type Whitelist struct {
 	mu   sync.RWMutex
 	set  map[int64]struct{}
 	file string
 }
 
-func NewBlacklist(file string) *Blacklist {
-	return &Blacklist{set: make(map[int64]struct{}), file: file}
+func NewWhitelist(file string) *Whitelist {
+	return &Whitelist{set: make(map[int64]struct{}), file: file}
 }
 
-func (b *Blacklist) Load() error {
+func (b *Whitelist) Load() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	data, err := os.ReadFile(b.file)
@@ -1723,7 +1729,7 @@ func (b *Blacklist) Load() error {
 	return nil
 }
 
-func (b *Blacklist) Save() error {
+func (b *Whitelist) Save() error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	ids := make([]int64, 0, len(b.set))
@@ -1737,14 +1743,18 @@ func (b *Blacklist) Save() error {
 	return os.WriteFile(b.file, data, 0644)
 }
 
-func (b *Blacklist) IsBanned(id int64) bool {
+func (b *Whitelist) IsAllowed(id int64) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	// 管理员自动放行
+	if isAdmin(id) {
+		return true
+	}
 	_, ok := b.set[id]
 	return ok
 }
 
-func (b *Blacklist) Ban(id int64) bool {
+func (b *Whitelist) Add(id int64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	_, existed := b.set[id]
@@ -1752,7 +1762,7 @@ func (b *Blacklist) Ban(id int64) bool {
 	return !existed
 }
 
-func (b *Blacklist) Unban(id int64) bool {
+func (b *Whitelist) Remove(id int64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	_, existed := b.set[id]
@@ -1760,7 +1770,7 @@ func (b *Blacklist) Unban(id int64) bool {
 	return existed
 }
 
-var blacklist = NewBlacklist("files/blacklist.json")
+var whitelist = NewWhitelist("files/whitelist.json")
 
 // ============================================================================
 // 加密存储：User Bot 手机号
@@ -1991,11 +2001,11 @@ func main() {
 	// 初始化缓存
 	InitCache()
 
-	// 加载黑名单
-	if err := blacklist.Load(); err != nil {
-		log.Printf("加载黑名单失败: %v", err)
+	// 加载白名单
+	if err := whitelist.Load(); err != nil {
+		log.Printf("加载白名单失败: %v", err)
 	} else {
-		log.Printf("黑名单已加载，共 %d 个用户", len(blacklist.set))
+		log.Printf("白名单已加载，共 %d 个用户", len(whitelist.set))
 	}
 
 	// 启动 Telegram 客户端
