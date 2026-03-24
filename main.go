@@ -23,6 +23,13 @@ import (
 	"github.com/amarnathcjd/gogram/telegram" // 导入 gogram 客户端核心库
 )
 
+type CleanRealm struct {
+	Filter bool
+	ID     string
+	Cate   string
+	Realm  string
+}
+
 type Infos struct {
 	BotClient  *telegram.Client         // 独立的 Bot 客户端（可选）
 	UserClient *telegram.Client         // 全局 Telegram 客户端实例
@@ -84,20 +91,8 @@ func main() {
 	}
 
 	// 如果 AppID 不为空，清理非当前 AppID 的 bot 缓存文件
-	if files, err := os.ReadDir(infos.FilesPath); err == nil {
-		targetID := strconv.FormatInt(int64(infos.Conf.AppID), 10)
-		for _, file := range files {
-			name := file.Name()
-			if !file.IsDir() && strings.HasPrefix(name, "bot_") && strings.HasSuffix(name, ".cache") {
-				currentID := strings.TrimSuffix(strings.TrimPrefix(name, "bot_"), ".cache")
-				if currentID != targetID {
-					err := os.Remove(filepath.Join(infos.FilesPath, name))
-					if err != nil {
-						log.Printf("删除缓存文件失败: %v", err)
-					}
-				}
-			}
-		}
+	if infos.Conf.AppID != 0 {
+		cleanFiles(CleanRealm{ID: strconv.FormatInt(int64(infos.Conf.AppID), 10), Cate: "bot", Realm: "cache", Filter: true})
 	}
 
 	// 如果配置文件中包含 BotToken，优先让 Bot 上线用来交互与监听管理指令
@@ -112,6 +107,10 @@ func main() {
 
 	client, err := telegram.NewClient(botConf)
 	if err != nil {
+		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
+		if infos.Conf.AppID != 0 {
+			cleanFiles(CleanRealm{ID: strconv.FormatInt(int64(infos.Conf.AppID), 10), Cate: "bot", Realm: "cache", Filter: false})
+		}
 		log.Fatalf("创建Bot客户端失败: %+v", err)
 		return
 	}
@@ -121,10 +120,18 @@ func main() {
 	infos.BotClient.On(telegram.OnMessage, handleBotCommand)
 
 	if err := infos.BotClient.Connect(); err != nil {
+		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
+		if infos.Conf.AppID != 0 {
+			cleanFiles(CleanRealm{ID: strconv.FormatInt(int64(infos.Conf.AppID), 10), Cate: "bot", Realm: "cache", Filter: false})
+		}
 		log.Fatalf("Bot连接失败: %+v", err)
 		return
 	}
 	if err := infos.BotClient.LoginBot(infos.Conf.BotToken); err != nil {
+		cleanFiles(CleanRealm{Cate: "bot", Realm: "session"})
+		if infos.Conf.AppID != 0 {
+			cleanFiles(CleanRealm{ID: strconv.FormatInt(int64(infos.Conf.AppID), 10), Cate: "bot", Realm: "cache", Filter: false})
+		}
 		log.Fatalf("Bot登录失败: %+v", err)
 		return
 	}
@@ -140,6 +147,15 @@ func main() {
 	// 尝试一并启动 UserBot（可能会卡或由于未登而只进行 Connect 不做其它业务）
 	err = startUserBot()
 	if err != nil {
+		cleanFiles(CleanRealm{Cate: "user", Realm: "session"})
+		if infos.Conf.Phone != "" {
+			cleanFiles(CleanRealm{ID: infos.Conf.Phone, Cate: "user", Realm: "cache", Filter: false})
+		}
+		if infos.BotClient != nil {
+			if _, err := infos.BotClient.SendMessage(infos.Conf.UserID, "UserBot启动失败, 程序已退出."); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+		}
 		log.Printf("UserBot 启动失败: %+v", err)
 		sigChan <- os.Interrupt
 	} else {
@@ -190,24 +206,7 @@ func startUserBot() error {
 		return nil
 	}
 
-	// 如果 Phone 不为空，清理非当前 Phone 的 user 缓存文件
-	if infos.Conf.Phone != "" {
-		if files, err := os.ReadDir(infos.FilesPath); err == nil {
-			targetID := infos.Conf.Phone
-			for _, file := range files {
-				name := file.Name()
-				if !file.IsDir() && strings.HasPrefix(name, "user_") && strings.HasSuffix(name, ".cache") {
-					currentID := strings.TrimSuffix(strings.TrimPrefix(name, "user_"), ".cache")
-					if currentID != targetID {
-						err := os.Remove(filepath.Join(infos.FilesPath, name))
-						if err != nil {
-							log.Printf("删除缓存文件失败: %v", err)
-						}
-					}
-				}
-			}
-		}
-	}
+	cleanFiles(CleanRealm{ID: infos.Conf.Phone, Cate: "user", Realm: "cache", Filter: true})
 
 	userConf := telegram.ClientConfig{
 		AppID:        infos.Conf.AppID,
@@ -776,4 +775,40 @@ func sendLink(m *telegram.NewMessage, link string) error {
 		log.Printf("发送下载链接失败: %+v", err)
 	}
 	return err
+}
+
+func cleanFiles(realm CleanRealm) {
+	switch strings.ToLower(realm.Realm) {
+	case "cache":
+		if realm.ID != "" && realm.ID != "0" {
+			if files, err := os.ReadDir(infos.FilesPath); err == nil {
+				src := fmt.Sprintf("%s_", strings.ToLower(realm.Cate))
+				for _, file := range files {
+					name := strings.TrimSpace(file.Name())
+					if !file.IsDir() && strings.HasPrefix(name, src) && strings.HasSuffix(name, ".cache") {
+						if realm.Filter {
+							currentID := strings.TrimSuffix(strings.TrimPrefix(name, src), ".cache")
+							if currentID != realm.ID {
+								err := os.Remove(filepath.Join(infos.FilesPath, name))
+								if err != nil {
+									log.Printf("删除缓存文件失败: %v", err)
+								}
+							}
+						} else {
+							err := os.Remove(filepath.Join(infos.FilesPath, name))
+							if err != nil {
+								log.Printf("删除缓存文件失败: %v", err)
+							}
+						}
+					}
+				}
+			}
+		}
+	case "session":
+		name := fmt.Sprintf("%s.session", strings.ToLower(realm.Cate))
+		err := os.Remove(filepath.Join(infos.FilesPath, name))
+		if err != nil {
+			log.Printf("删除缓存文件失败: %v", err)
+		}
+	}
 }
