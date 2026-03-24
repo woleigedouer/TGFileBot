@@ -1,218 +1,102 @@
-# Telegram File Stream Bot
+# TGBot
 
-## 项目简介 | Project Introduction
-本项目是一个 Telegram 机器人，支持为 Telegram 频道/群组中的文件生成直接下载链接（直链），支持断点续传、在线播放等功能。适合个人或团队部署，实现文件分享自动化。
+TGBot 是一个 Telegram Bot 和 UserBot 结合的项目，旨在提供文件直链分享、媒体流式传输以及通过 Telegram 机器人管理 UserBot 的功能。
 
-## 项目功能 | Features
-- 生成 Telegram 文件的直链，支持 HTTP Range 请求
-- 支持视频、音频、文档、图片等多种类型文件
-- **User Bot 支持**：可选配置 User Bot 用于访问私有频道和增强兼容性
-- **Telegram 链接解析**：支持 t.me/c/ 和 t.me/username/ 格式链接直接生成直链
-- 用户访问权限控制与黑名单管理
-- 文件信息缓存，提升性能
-- 支持在线播放和断点续传
-- 支持多用户管理
-- 支持自定义直链 hash 长度
-- **安全加密存储**：手机号码使用 AES-GCM 加密本地保存
+## 功能特性
 
-## 技术栈 | Tech Stack
-- Go 1.21+
-- [gotgproto](https://github.com/celestix/gotgproto) (Telegram 客户端)
-- SQLite (会话存储)
-- FreeCache (文件信息缓存)
+- **文件直链分享**: 将 Telegram 中的媒体文件（图片、文档、视频）生成可直接访问的 HTTP 直链。
+- **媒体流式传输**: 支持通过 HTTP Range 请求对视频等媒体文件进行流式传输，实现边下边播。
+- **UserBot 管理**: 通过 Bot 客户端发送命令来管理 UserBot 的登录、白名单设置等。
+- **多管理员支持**: 支持配置多个管理员 ID，共同管理 Bot。
+- **密码保护**: 可选的密码保护，限制对直链的访问。
+- **缓存清理**: 自动清理旧的 Bot 和 UserBot 缓存文件。
 
-## 安装与运行 | Installation & Run
-1. 安装 Go 1.21+ 环境
-2. 复制 `sample.zh.env` 为 `.env`，并填写参数
-3. 安装依赖并运行：
-   ```cmd
-   go mod tidy
-   go run main.go
+## 部署
+
+### 1. 获取 API ID 和 API Hash
+
+访问 [my.telegram.org](https://my.telegram.org/) 登录您的 Telegram 账号，创建一个新的应用以获取 `App ID` 和 `App Hash`。
+
+### 2. 获取 Bot Token
+
+在 Telegram 中搜索 `@BotFather`，创建一个新的 Bot 并获取 `Bot Token`。
+
+### 3. 配置 `config.json`
+
+在 `files` 目录下创建 `config.json` 文件，并根据 `config.json.example` 填写您的配置信息。
+
+```json
+{
+  "port": 8080,               // 程序运行的 HTTP 端口
+  "id": 0,                    // Telegram API ID
+  "hash": "",                 // Telegram API Hash
+  "site": "http://your_domain_or_ip", // 反代域名，用于生成直链
+  "phone": "",                // User Bot 身份对应的手机号 (带国际区号，例如: +8613800138000)
+  "botToken": "",             // 接收/phone等命令的Bot Token
+  "password": "",             // 访问/link的密码 (可选)
+  "userID": 0,                // User Bot 身份对应的账号ID (用于判断是否为管理员，建议填写UserBot的ID)
+  "adminIDs": [],             // 支持多管理员的ID列表 (填写Telegram用户ID)
+  "whiteIDs": []              // 支持多白名单的ID列表 (可选，用于限制/stream访问)
+}
+```
+
+**注意**:
+- `id` 和 `hash` 填写您在 [my.telegram.org](https://my.telegram.org/) 获取的 `App ID` 和 `App Hash`。
+- `site` 填写您的服务器域名或 IP 地址，用于生成直链。
+- `phone` 填写您用于 UserBot 登录的手机号，需要带国际区号。
+- `botToken` 填写您从 `@BotFather` 获取的 Bot Token。
+- `userID` 填写您的 Telegram 用户 ID，用于 Bot 接收管理命令。
+- `adminIDs` 可以填写多个管理员的 Telegram 用户 ID。
+- `password` 是可选的，如果设置，访问 `/stream` 和 `/link` 接口需要携带 `key` 参数。
+
+### 4. 运行项目
+
+#### 本地运行
+
+```bash
+go mod tidy
+go run main.go -files files
+```
+
+#### Docker 部署
+
+1. 构建 Docker 镜像:
+   ```bash
+   docker build -t tgfilebot .
    ```
 
-## 参数配置说明 | Configuration
-
-### 必填参数 | Required Parameters
-- `API_ID`：Telegram API ID（在 https://my.telegram.org 获取）
-- `API_HASH`：Telegram API Hash（同上）
-- `BOT_TOKEN`：Telegram Bot Token（在 @BotFather 获取）
-- `LOG_CHANNEL`：用于存储转发消息的频道 ID（必须是频道，格式如 -100xxxxxxxxxx）
-
-### 可选参数 | Optional Parameters
-- `PORT`：HTTP 服务端口，默认 8080
-- `HOST`：服务地址（如 http://localhost:8080 或 https://your-domain.com）
-- `HASH_LENGTH`：直链 hash 长度，默认 6
-- `ADMIN_USERS`：管理机器人的 Telegram 用户 ID，逗号分隔（**强烈推荐设置**）
-
-## 使用示例 | Usage Example
-
-### 基本使用
-1. 向 Bot 发送文件或转发频道/群组中的文件
-2. Bot 回复直链下载地址
-3. 通过直链可直接下载或在线播放文件
-
-### Telegram 链接解析
-1. 向 Bot 发送 Telegram 链接：
-   - 私有频道：`https://t.me/c/1683088671/36831`
-   - 公开频道：`https://t.me/channelname/123` 或 `@channelname/123`
-2. Bot 自动解析并返回直链
-3. **注意**：机器人或 User Bot 必须加入该频道才能访问
-
-### 管理命令（仅限管理员）
-- `/start` - 开始使用机器人
-- `/ban <用户ID>` - 将用户加入黑名单
-- `/unban <用户ID>` - 将用户移出黑名单
-- `/phone <手机号>` - 设置 User Bot 手机号
-- `/code <验证码>` - 提交登录验证码
-- `/pass <密码>` - 提交两步验证密码
-
-### 配置 User Bot（可选，增强功能）
-
-#### 为什么需要 User Bot？
-- 访问私有频道和群组的消息
-- 提升对某些链接的兼容性
-- 绕过某些 Bot 访问限制
-
-#### 配置步骤
-1. **前提**：在 `ADMIN_USERS` 中包含你的 Telegram 用户 ID
-2. **设置手机号**：
+2. 运行 Docker 容器:
+   ```bash
+   docker run -d --name tgfilebot -p 9981:8080 -v $(pwd)/files:/root/files tgfilebot
    ```
-   /phone +8613800138000
-   ```
-   - 手机号会使用 AES-GCM 加密保存到本地 `phone.enc`
-   - 加密密钥由 `API_HASH + BOT_TOKEN + TELE_ID` 派生生成
-
-3. **提交验证码**：
-   - Telegram 会发送验证码到你的手机
-   - 在机器人中发送：`/code 12345`
-   - 超时时间：5 分钟
-
-4. **提交两步验证密码**（如果需要）：
-   ```
-   /pass yourpassword
+   或者使用 `docker-compose.yml`:
+   ```bash
+   docker-compose up -d
    ```
 
-5. **完成**：User Bot 启动成功后会显示用户名和 ID
+## 使用方法
 
-#### 安全说明
-- 手机号加密存储，密钥与 `API_HASH`、`BOT_TOKEN`、`TELE_ID` 绑定
-- 若这些参数变动，历史 `phone.enc` 将无法解密，需要重新设置
-- 建议仅在可信环境部署
-- 验证码和密码通过私聊发送，不会被记录
+### Bot 命令
 
-## 直链格式说明  Link Format
+通过您的 Bot 客户端向 Bot 发送以下命令：
 
-### Bot 转发的文件
-```
-http://your-host/stream/{messageID}?hash={hash}
-```
+- `/phone <手机号>`: 绑定 UserBot 手机号，例如 `/phone +8613800138000`。
+- `/code <验证码>`: 输入 Telegram 发送给您的验证码，完成 UserBot 登录。
+- `/allow <用户ID>`: 添加用户到白名单，允许其访问直链。
+- `/disallow <用户ID>`: 从白名单中移除用户。
 
-### Telegram 链接生成的直链
-```
-http://your-host/stream/{channelID}_{messageID}?hash={hash}
-```
+### 获取直链
 
-### 下载参数
-- 在线播放：`http://your-host/stream/xxx?hash=xxx`
-- 强制下载：`http://your-host/stream/xxx?hash=xxx&d=true`
+- **通过 Bot 转发/发送媒体文件**: 将 Telegram 中的图片、文档、视频等媒体文件转发或直接发送给 Bot，Bot 会自动回复直链。
+- **通过 Bot 发送 Telegram 链接**: 发送 `t.me/c/channel_id/message_id` 或 `t.me/username/message_id` 格式的链接给 Bot，Bot 会解析并回复直链。
+- **通过 HTTP 接口**:
+    - `GET /stream?cid=<chat_id>&mid=<message_id>&cate=<bot|user>&key=<password>`: 获取媒体文件流。
+    - `GET /link?link=<telegram_link>&key=<password>`: 解析 Telegram 链接并重定向到直链。
 
-## 常见问题  FAQ
+## 注意事项
 
-**Q: LOG_CHANNEL 必须是频道吗？**  
-A: 是，且 Bot 必须为频道管理员。
+- `App ID` 和 `App Hash` 建议使用您自己的，以避免不必要的限制。
+- UserBot 登录后，会缓存对话列表，这可能需要一些时间。
+- 如果 UserBot 长时间未活动，可能会出现 Peer 缓存失效的问题，此时 Bot 会尝试刷新对话列表。
+- 确保您的服务器防火墙允许外部访问配置的 `port`。
 
-**Q: 如何保证直链安全？**  
-A: 直链包含安全 hash 校验，防止非法访问。Hash 基于文件名、大小、MIME类型和文件ID生成。
-
-**Q: 文件信息缓存多久？**  
-A: 默认缓存 1 小时，使用 FreeCache 存储（最大 10MB）。
-
-**Q: 如何添加/移除管理员？**  
-A: 修改 `.env` 或 docker 环境变量中的 `ADMIN_USERS` 参数，重启服务。
-
-**Q: User Bot 和普通 Bot 有什么区别？**  
-A: User Bot 使用真实用户账号登录，可以访问用户加入的所有频道和群组；普通 Bot 只能访问明确添加它的频道。
-
-**Q: 手机号加密是否安全？**  
-A: 使用 AES-256-GCM 加密，密钥基于 SHA-256 哈希派生。但仍建议在可信环境部署，避免配置文件泄露。
-
-**Q: 如果验证码输入错误怎么办？**  
-A: 验证码有多次尝试机会。如果失败，需要删除 `files/userbot.session` 文件并重新启动服务。
-
-**Q: 支持哪些文件类型？**  
-A: 支持所有 Telegram 支持的文件类型，包括文档、图片、视频、音频等。
-
-## 项目结构  Project Structure
-```
-TGFileBot/
-├── `main.go`              \# 主程序
-├── `go.mod`               \# Go 模块配置
-├── `go.sum`               \# 依赖校验
-├── `sample.zh.env`        \# 配置示例
-├── `README.md`            \# 本文件
-├── `files/`
-│   ├── `fsb.session`        \# Bot 会话文件（自动生成）
-│   ├── `userbot.session`    \# User Bot 会话文件（自动生成）
-│   ├── `phone.enc`         \# 加密的手机号（自动生成）
-│   └── `.env`              \# 配置文件
-└── `LICENSE`
-```
-
-## Docker 部署 / Docker usage
-本项目提供已发布镜像 `lm317379829/tgfilebot`（镜像名以实际仓库为准），镜像中应用的工作目录为 `/root/`，并在容器中使用 `/root/files` 存放会话文件和配置文件。请将本地的 `files` 目录挂载到容器的 `/root/files`，并确保 `files/.env`、`files/blacklist.json` 等必要文件在宿主机上存在，否则在挂载后容器内的默认文件会被覆盖。
-
-- 容器内部路径：`/root/files`
-- 建议映射端口：`9981:9981`（镜像 Dockerfile 中 EXPOSE 了 9981）
-
-Windows (cmd.exe) 示例：
-```cmd
-rem 在仓库根目录运行
-if not exist "files" mkdir files
-if not exist "files\\blacklist.json" echo []>files\\blacklist.json
-copy sample.zh.env files\\.env
-
-docker run -d --name tgfilebot \
-  -p 9981:9981 \
-  -v "%cd%/files:/root/files" \
-  --env-file "%cd%/files/.env" \
-  lm317379829/tgfilebot:latest
-```
-
-Linux / macOS (sh) 示例：
-```sh
-# 在仓库根目录运行
-mkdir -p files
-[ -f files/blacklist.json ] || echo -n "[]" > files/blacklist.json
-cp sample.zh.env files/.env
-
-docker run -d --name tgfilebot \
-  -p 9981:9981 \
-  -v "$(pwd)/files:/root/files" \
-  --env-file "$(pwd)/files/.env" \
-  lm317379829/tgfilebot:latest
-```
-
-docker-compose 示例（文件：`docker-compose.yml`）：
-```yaml
-version: '3.8'
-services:
-  tgfilebot:
-    image: lm317379829/tgfilebot:latest
-    restart: unless-stopped
-    ports:
-      - "9981:9981"
-    volumes:
-      - ./files:/root/files
-    env_file:
-      - ./files/.env
-```
-
-注意事项：
-- 当你使用 `-v ./files:/root/files` 将宿主目录挂载到容器时，容器镜像内的 `/root/files` 会被挂载点遮盖；如果宿主机 `files` 目录中不存在 `blacklist.json`、`.env` 或 `.session` 文件，需要先在宿主机上创建或复制（参见示例）。
-- 如果你希望在容器启动时由镜像自动创建 `blacklist.json` 等文件，可以在不挂载 `files` 的情况下先运行一次容器让镜像初始化文件，然后再将宿主目录中的文件拷贝出来（不推荐在生产中这样做）。
-
-## 贡献指南  Contributing
-欢迎提交 Issue 和 Pull Request。请遵循 [Go 代码规范](https://golang.org/doc/effective_go.html)。
-
-## 许可证  License
-MIT License. 详见 LICENSE 文件。

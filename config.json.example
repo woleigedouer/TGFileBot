@@ -1,0 +1,12 @@
+{
+  "port": 8080,
+  "id": 0,
+  "hash": "",
+  "site": "http://your_domain_or_ip",
+  "phone": "",
+  "botToken": "",
+  "password": "",
+  "userID": 0,
+  "adminIDs": [],
+  "whiteIDs": []
+}
