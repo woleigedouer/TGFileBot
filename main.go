@@ -100,10 +100,9 @@ func main() {
 	// 加载配置文件
 	files := flag.String("files", "files", "文件路径和名称")
 	file := flag.String("log", "files/log.log", "日志文件路径")
-	// 版本参数: -version 和 -v 指向同一个标志
 	var ver bool
 	flag.BoolVar(&ver, "version", false, "打印版本号并退出")
-	flag.BoolVar(&ver, "v", false, "打印版本号并退出 (shorthand)")
+	flag.BoolVar(&ver, "v", false, "打印版本号并退出")
 	flag.Parse()
 
 	// 如果请求显示版本则直接输出并退出，避免初始化其他资源
@@ -192,7 +191,6 @@ func main() {
 		if err := infos.checkStatus(); err != nil {
 			log.Printf("UserBot 登录失败: %+v", err)
 			infos.resetStatus()
-			sigChan <- os.Interrupt
 		}
 	}
 
@@ -632,7 +630,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		var src string
 		switch infos.Status {
 		case 0:
-			src = "userBot 未登录, 请发送 /phone 手机号"
+			src = "userBot 未登录, 仅使用 Bot 或发送 /phone 手机号登录 userBot"
 		case 1:
 			src = "正在等待验证码, 请发送 /code 验证码"
 		case 2:
@@ -760,7 +758,6 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			log.Printf("发送消息失败: %+v", err)
 		}
 		return nil
-
 	case strings.HasPrefix(text, "/pass"):
 		if !infos.isAdmin(m.SenderID()) {
 			log.Printf("收到非管理员消息: %d", m.SenderID())
@@ -805,6 +802,10 @@ func handleMess(m *telegram.NewMessage) error {
 			link += fmt.Sprintf("&key=%s", infos.Conf.Password)
 		}
 		return sendLink(m, link)
+	}
+
+	if infos.Status != 3 {
+		return nil
 	}
 
 	src := strings.TrimSpace(m.Text())
@@ -900,10 +901,10 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	mid := int32(value)
 
 	cate := params.Get("cate")
-	if cate == "bot" {
-		infos.Client = infos.BotClient
-	} else {
+	if cate == "user" && infos.Status == 3 {
 		infos.Client = infos.UserClient
+	} else {
+		infos.Client = infos.BotClient
 	}
 
 	// 获取消息内容 (增加一次重试逻辑, 解决由于长时间闲置导致 Peer 缓存失效的问题)

@@ -4,7 +4,7 @@ TGBot 是一个 Telegram Bot 和 UserBot 结合的项目，旨在提供文件直
 
 ## 暂存问题
 
-由于 MTProto 协议更新导致某些账号输入 /code 验证码后出现 [PHONE_CODE_EXPIRED] 错误。等待上游 AmarnathCJD/gogram 更新解决。
+由于 MTProto 协议更新导致**部分**账号输入 /code 验证码后出现 [PHONE_CODE_EXPIRED] 错误。等待上游 AmarnathCJD/gogram 更新解决。此时仅可使用 Bot，**通过 Telegram 链接获取直链**相关功能将无法使用。
 
 ## 功能特性
 
