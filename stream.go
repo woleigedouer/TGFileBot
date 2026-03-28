@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"regexp"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +27,7 @@ type Stream struct {
 	Ctx          context.Context        // 上下文
 	Client       *telegram.Client       // 客户端
 	Src          *telegram.MessageMedia // 消息媒体
+	Workers      int                    // 并发数
 	MID          int32                  // 消息ID
 	CID          int64                  // 频道ID
 	ChunkSize    int64                  // 任务块大小
@@ -40,7 +39,6 @@ type Stream struct {
 	Count        atomic.Int64           // 任务数量
 	Version      atomic.Int64           // 版本号
 	Mutex        *sync.Mutex            // 互斥锁
-	Rex          *regexp.Regexp         // 正则表达式
 	Tasks        chan *Task             // 任务队列
 }
 
@@ -53,11 +51,12 @@ func newTask() *Task {
 	}
 }
 
-func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, mid int32, cid int64) *Stream {
+func newStream(ctx context.Context, client *telegram.Client, media telegram.MessageMedia, workers int, mid int32, cid int64) *Stream {
 	return &Stream{
 		Ctx:          ctx,
 		Client:       client,
 		Src:          &media,
+		Workers:      workers,
 		MID:          mid,
 		CID:          cid,
 		ChunkSize:    512 * 1024,
@@ -66,7 +65,6 @@ func newStream(ctx context.Context, client *telegram.Client, media telegram.Mess
 		Mutex:        new(sync.Mutex),
 		TaskStart:    new(int64),
 		TaskEnd:      new(int64),
-		Rex:          regexp.MustCompile(`(\d+).*?seconds`),
 		Count:        atomic.Int64{},
 		Version:      atomic.Int64{},
 	}
@@ -74,10 +72,10 @@ func newStream(ctx context.Context, client *telegram.Client, media telegram.Mess
 
 func (stream *Stream) start(contentStart, contentEnd int64) {
 	maxTasks := int(math.Ceil(float64(stream.ContentSize) / float64(stream.ChunkSize)))
-	if maxTasks > infos.Conf.Workers {
-		maxTasks = infos.Conf.Workers
+	if maxTasks > stream.Workers {
+		maxTasks = stream.Workers
 	}
-	if infos.Conf.Workers == 1 {
+	if stream.Workers == 1 {
 		stream.ChunkSize = 1024 * 1024
 	}
 
@@ -133,26 +131,13 @@ func (stream *Stream) download(contentStart, contentEnd int64) {
 
 		for num := 1; num <= 3; num++ {
 			version := stream.Version.Load()
-			content, fileName, err := stream.Client.DownloadChunk(*stream.Src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize))
+			content, fileName, err := stream.Client.DownloadChunk(*stream.Src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize), stream.Ctx)
 			if err != nil {
 				switch {
 				case telegram.MatchError(err, "FILE_REFERENCE_EXPIRED"):
 					// 4. 检测 FILE_REFERENCE_EXPIRED 错误，重试
 					log.Printf("文件引用已过期: cid=%d, mid=%d, version=%d", stream.CID, stream.MID, version)
 					stream.refresh(version)
-					continue
-				case telegram.MatchError(err, "_WAIT"):
-					// 5. 检测 FLOOD_WAIT 错误，等待指定时间后重试
-					wait := 3
-					match := stream.Rex.FindStringSubmatch(err.Error())
-					if len(match) > 1 {
-						wait, err = strconv.Atoi(match[1])
-						if err != nil {
-							log.Printf("解析等待时间失败: cid=%d, mid=%d, version=%d, err=%v", stream.CID, stream.MID, version, err)
-						}
-					}
-					log.Printf("下载太过频繁, 等待 %d 秒后重试", wait)
-					time.Sleep(time.Duration(wait) * time.Second)
 					continue
 				}
 				task.Error = err
