@@ -89,14 +89,14 @@ func (stream *Stream) start(contentStart, contentEnd int64) {
 
 	for numTask := 1; numTask <= maxTasks; numTask++ {
 		stream.Count.Add(1)
-		go func() {
+		go func(numTask int) {
 			defer stream.Count.Add(-1)
-			stream.download(contentStart, contentEnd)
-		}()
+			stream.download(numTask, contentStart, contentEnd)
+		}(numTask)
 	}
 }
 
-func (stream *Stream) download(contentStart, contentEnd int64) {
+func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 	for {
 		stream.Mutex.Lock()
 		task := newTask()
@@ -144,8 +144,8 @@ func (stream *Stream) download(contentStart, contentEnd int64) {
 				switch {
 				case telegram.MatchError(err, "FILE_REFERENCE_EXPIRED"):
 					// 4. 检测 FILE_REFERENCE_EXPIRED 错误，重试
-					log.Printf("文件引用已过期: cid=%d, mid=%d, version=%d, fileName=%s", stream.CID, stream.MID, version, fileName)
-					stream.refresh(version)
+					log.Printf("文件引用已过期: cid=%d, mid=%d, version=%d, fileName=%s, numTask=%d", stream.CID, stream.MID, version, stream.FileName, numTask)
+					stream.refresh(numTask, version)
 					continue
 				}
 				task.Error = err
@@ -156,7 +156,7 @@ func (stream *Stream) download(contentStart, contentEnd int64) {
 				return
 			} else {
 				duration := time.Since(start)
-				log.Printf("切片下载完成: cid=%d, mid=%d, start=%d, end=%d, content=%d, fileName=%s, num=%d, duration=%.2fs", stream.CID, stream.MID, task.ContentStart, task.ContentEnd, len(content), fileName, num, duration.Seconds())
+				log.Printf("切片下载完成: cid=%d, mid=%d, start=%d, end=%d, content=%d, fileName=%s, num=%d, numTask=%d, duration=%.2fs", stream.CID, stream.MID, task.ContentStart, task.ContentEnd, len(content), fileName, num, numTask, duration.Seconds())
 				task.Cond.L.Lock()
 				content = content[task.Offset:]
 				if task.Content == nil {
@@ -201,12 +201,12 @@ func (stream *Stream) clean() {
 	}
 }
 
-func (stream *Stream) refresh(version int64) {
+func (stream *Stream) refresh(numTask int,version int64) {
 	stream.Mutex.Lock()
 	defer stream.Mutex.Unlock()
 
 	if version != stream.Version.Load() {
-		log.Printf("文件引用已刷新: cid=%d, mid=%d, version=%d, newVersion=%d", stream.CID, stream.MID, version, stream.Version.Load())
+		log.Printf("文件引用已刷新, 直接使用新版本: cid=%d, mid=%d, numTask=%d, version=%d, newVersion=%d", stream.CID, stream.MID, numTask, version, stream.Version.Load())
 		return
 	}
 
@@ -228,5 +228,5 @@ func (stream *Stream) refresh(version int64) {
 	}
 	*stream.Src = src.Media()
 	stream.Version.Add(1)
-	log.Printf("文件引用已刷新: cid=%d, mid=%d, version=%d", stream.CID, stream.MID, stream.Version.Load())
+	log.Printf("文件引用已刷新: cid=%d, mid=%d, numTask=%d, version=%d, newVersion=%d", stream.CID, stream.MID, numTask, version, stream.Version.Load())
 }

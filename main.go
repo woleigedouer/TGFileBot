@@ -40,7 +40,6 @@ type Infos struct {
 	Mutex      *sync.Mutex      // 并发锁
 	Conf       *Conf            // 全局配置指针
 	HasNew     bool             // 是否有新配置
-	Hash       string           // 配置密码的 6 位哈希值
 	FilesPath  string           // 配置目录路径
 	FilePath   string           // 日志文件路径
 	File       *os.File         // 日志文件对象
@@ -48,6 +47,8 @@ type Infos struct {
 	BotID      int64            // Bot 的 ID
 	Code       chan string      // 验证码
 	Pass       chan string      // 二次验证密码
+	IDs        map[int64]string // 授权ID列表
+	Rex        *regexp.Regexp   // 正则表达式
 }
 
 var infos *Infos
@@ -86,7 +87,6 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		}
 	}
 
-
 	return &Infos{
 		File:      file,
 		FilePath:  filePath,
@@ -96,6 +96,8 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		Mutex:     new(sync.Mutex),
 		Code:      make(chan string, 1),
 		Pass:      make(chan string, 1),
+		IDs:       make(map[int64]string, len(conf.AdminIDs)+len(conf.WhiteIDs)+1),
+		Rex:       regexp.MustCompile(`(?:FLOOD_PREMIUM_WAIT_|A WAIT OF |FLOOD_WAIT_)(\d+)`),
 	}, nil
 }
 
@@ -122,11 +124,6 @@ func main() {
 		return
 	}
 	infos = value
-	// 计算 Password 的 6 位 MD5 哈希值
-	if infos.Conf.Password != "" {
-		src := md5.Sum([]byte(infos.Conf.Password))
-		infos.Hash = hex.EncodeToString(src[:])[:6]
-	}
 
 	// 退出时清理
 	defer func() {
@@ -250,11 +247,10 @@ func (infos *Infos) startBot() (err error) {
 		CacheSenders: true,
 		FloodHandler: func(err error) bool {
 			wait := 3
-			re := regexp.MustCompile(`(\d+).*?seconds`)
-			match := re.FindStringSubmatch(err.Error())
-			if len(match) > 1 {
-				if wait, err = strconv.Atoi(match[1]); err != nil {
-					log.Printf("解析等待时间失败: err=%v", err)
+			matches := infos.Rex.FindStringSubmatch(strings.ToUpper(err.Error()))
+			if len(matches) > 1 {
+				if value, err := strconv.Atoi(matches[1]); err == nil {
+					wait = value
 				}
 			}
 			log.Printf("下载太过频繁, 等待 %d 秒后重试", wait)
@@ -317,14 +313,13 @@ func (infos *Infos) userBotClient() (err error) {
 		CacheSenders: true,
 		FloodHandler: func(err error) bool {
 			wait := 3
-			re := regexp.MustCompile(`(\d+).*?seconds`)
-			match := re.FindStringSubmatch(err.Error())
-			if len(match) > 1 {
-				if wait, err = strconv.Atoi(match[1]); err != nil {
-					log.Printf("解析等待时间失败: err=%+v", err)
+			matches := infos.Rex.FindStringSubmatch(strings.ToUpper(err.Error()))
+			if len(matches) > 1 {
+				if value, err := strconv.Atoi(matches[1]); err == nil {
+					wait = value
 				}
 			}
-			log.Printf("下载太过频繁, 等待 %d 秒后重试, err=%+v", wait, err)
+			log.Printf("下载太过频繁, 等待 %d 秒后重试", wait)
 			time.Sleep(time.Duration(wait) * time.Second)
 			return true
 		},
@@ -533,6 +528,49 @@ func (infos *Infos) resetStatus() {
 	infos.Mutex.Unlock()
 }
 
+func (infos *Infos) calculateHash(userID int64) string {
+	if infos.Conf.Password == "" {
+		return ""
+	}
+	res := fmt.Sprintf("%d%s", userID, infos.Conf.Password)
+	src := md5.Sum([]byte(res))
+	return hex.EncodeToString(src[:])[:6]
+}
+
+func (infos *Infos) checkHash(hash string) int64 {
+	if hash == "" {
+		return 0
+	}
+	if value, ok := infos.IDs[infos.Conf.UserID]; ok && value != "" {
+		if value == hash {
+			return infos.Conf.UserID
+		}
+	} else {
+		infos.IDs[infos.Conf.UserID] = infos.calculateHash(infos.Conf.UserID)
+	}
+
+	for _, id := range infos.Conf.AdminIDs {
+		if value, ok := infos.IDs[id]; ok && value != "" {
+			if value == hash {
+				return id
+			}
+		} else {
+			infos.IDs[id] = infos.calculateHash(id)
+		}
+	}
+
+	for _, id := range infos.Conf.WhiteIDs {
+		if value, ok := infos.IDs[id]; ok && value != "" {
+			if value == hash {
+				return id
+			}
+		} else {
+			infos.IDs[id] = infos.calculateHash(id)
+		}
+	}
+	return 0
+}
+
 func handleMain(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if path != "/" {
@@ -552,52 +590,6 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 			log.Printf("发送网页失败: %+v", err)
 		}
 		return
-	case path == "/log":
-		// 1. 设置响应头
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Connection", "keep-alive")
-		// 禁用 Nginx 等代理的缓冲 (可选, 但对流式传输很重要)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-
-		// 获取 Flusher 接口
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "浏览器不支持流式传输", http.StatusInternalServerError)
-			return
-		}
-
-		// 为每个请求打开一个新的文件句柄，避免并发读取冲突
-		file, err := os.Open(infos.FilePath)
-		if err != nil {
-			log.Printf("无法打开日志文件进行读取: %v", err)
-			http.Error(w, fmt.Sprintf("无法读取日志文件: %v", err), http.StatusInternalServerError)
-			return
-		}
-		defer func() {
-			if err := file.Close(); err != nil {
-				log.Printf("关闭日志文件失败: %v", err)
-			}
-		}()
-
-		ctx := r.Context()
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if _, err := fmt.Fprintf(w, "%s\n", scanner.Text()); err != nil {
-					log.Printf("发送网页失败: %+v", err)
-				}
-				flusher.Flush()
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			log.Printf("读取文件时发生错误: %v", err)
-			if _, err := fmt.Fprintf(w, "\n[服务器端读取错误: %v]\n", err); err != nil {
-				log.Printf("发送网页失败: %+v", err)
-			}
-		}
 	case strings.HasPrefix(path, "/link"):
 		handleLink(w, r)
 		return
@@ -661,10 +653,10 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		whiteID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(text, "/allow")), 10, 64)
 		if err != nil {
-			if _, err := m.Reply("添加白名单失败: " + err.Error()); err != nil {
+			if _, err := m.Reply(fmt.Sprintf("添加白名单失败: %+v", err)); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return err
+			return nil
 		}
 		if whiteID != 0 {
 			infos.Mutex.Lock()
@@ -686,10 +678,10 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		whiteID, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(text, "/disallow")), 10, 64)
 		if err != nil {
-			if _, err := m.Reply("移除白名单失败: " + err.Error()); err != nil {
+			if _, err := m.Reply(fmt.Sprintf("移除白名单失败: %+v", err)); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return err
+			return nil
 		}
 		if whiteID != 0 {
 			infos.Mutex.Lock()
@@ -726,7 +718,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			if _, err := m.Reply("手机不能为空"); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return errors.New("手机不能为空")
+			return nil
 		}
 
 		if !strings.HasPrefix(content, "+") {
@@ -734,10 +726,10 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 
 		if err := infos.startUserBot(content); err != nil {
-			if _, err := m.Reply("启动 UserBot 失败: " + err.Error()); err != nil {
+			if _, err := m.Reply(fmt.Sprintf("启动 UserBot 失败: %+v", err)); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return err
+			return nil
 		}
 		return nil
 	case strings.HasPrefix(text, "/code"):
@@ -758,10 +750,10 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 
 		if err := infos.submitCode(code); err != nil {
-			if _, err := m.Reply("提交验证码失败: " + err.Error()); err != nil {
+			if _, err := m.Reply(fmt.Sprintf("提交验证码失败: %+v", err)); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return err
+			return nil
 		}
 		if _, err := m.Reply("提交验证码成功"); err != nil {
 			log.Printf("发送消息失败: %+v", err)
@@ -785,13 +777,186 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 
 		if err := infos.submitPass(pass); err != nil {
-			if _, err := m.Reply("提交密码失败: " + err.Error()); err != nil {
+			if _, err := m.Reply(fmt.Sprintf("提交密码失败: %+v", err)); err != nil {
 				log.Printf("发送消息失败: %+v", err)
 			}
-			return err
+			return nil
 		}
 		if _, err := m.Reply("提交密码成功"); err != nil {
 			log.Printf("发送消息失败: %+v", err)
+		}
+		return nil
+	case strings.HasPrefix(text, "/channel"):
+		if !infos.isAdmin(m.SenderID()) {
+			log.Printf("收到非管理员消息: %d", m.SenderID())
+			if _, err := m.Reply("你没有使用此机器人的权限"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/channel"))
+		if content == "" {
+			log.Print("频道ID不能为空")
+			return nil
+		}
+		if !strings.HasPrefix(content, "-100") {
+			content = "-100" + content
+		}
+		value, err := strconv.ParseInt(content, 10, 64)
+		if err != nil {
+			if _, err := m.Reply(fmt.Sprintf("频道ID格式错误: %+v", err)); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		infos.Mutex.Lock()
+		infos.Conf.ChannelID = value
+		infos.HasNew = true
+		infos.Mutex.Unlock()
+		log.Printf("频道ID已设置为: %d", value)
+		if _, err := m.Reply(fmt.Sprintf("频道ID已设置为: %d", value)); err != nil {
+			log.Printf("发送消息失败: %+v", err)
+		}
+		return nil
+	case strings.HasPrefix(text, "/workers"):
+		if !infos.isAdmin(m.SenderID()) {
+			log.Printf("收到非管理员消息: %d", m.SenderID())
+			if _, err := m.Reply("你没有使用此机器人的权限"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/workers"))
+		if content == "" {
+			log.Print("并发数不能为空")
+			return nil
+		}
+
+		num, err := strconv.Atoi(content)
+		if err != nil {
+			log.Print("并发数必须为数字")
+			return nil
+		}
+		if num <= 0 {
+			log.Print("并发数必须大于 0")
+			return nil
+		}
+		if num > 4 {
+			log.Print("并发数不建议超过 4, 否则可能导致下载失败甚至封号")
+			if _, err := m.Reply("并发数不建议超过 4, 否则可能导致下载失败甚至封号"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		infos.Mutex.Lock()
+		infos.Conf.Workers = num
+		infos.HasNew = true
+		infos.Mutex.Unlock()
+		log.Printf("并发数已设置为: %d", num)
+		if _, err := m.Reply(fmt.Sprintf("并发数已设置为: %d", num)); err != nil {
+			log.Printf("发送消息失败: %+v", err)
+		}
+		return nil
+	case strings.HasPrefix(text, "/info"):
+		if !infos.isAdmin(m.SenderID()) {
+			log.Printf("收到非管理员消息: %d", m.SenderID())
+			if _, err := m.Reply("你没有使用此机器人的权限"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+
+		num := 10
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/info"))
+		if content != "" {
+			if value, err := strconv.Atoi(content); err == nil && value > 0 {
+				num = value
+			}
+		}
+
+		// 读取日志
+		lines, err := readLastLines(infos.FilePath, num)
+		if err != nil {
+			if _, err := m.Reply(fmt.Sprintf("读取日志失败: %+v", err)); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+
+		if len(lines) == 0 {
+			if _, err := m.Reply("暂无日志内容"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+
+		const maxCount = 4000
+		var values strings.Builder
+		header := fmt.Sprintf("<b>📜 系统日志 (最后 %d 行)</b>\n\n", len(lines))
+		values.WriteString(header)
+		values.WriteString("<pre>")
+
+		for _, line := range lines {
+			line = html.EscapeString(line) + "\n"
+			// 如果当前消息加上这行和 </pre> 后超过限制，则先发送当前部分
+			if values.Len()+len(line)+len("</pre>") > maxCount {
+				values.WriteString("</pre>")
+				if _, err := m.Reply(values.String()); err != nil {
+					log.Printf("发送消息失败: %+v", err)
+				}
+				// 重置 Builder 开启下一个分片
+				values.Reset()
+				values.WriteString("<pre>")
+			}
+			values.WriteString(line)
+		}
+
+		// 发送剩余内容
+		if values.Len() > len("<pre>") {
+			values.WriteString("</pre>")
+			if _, err := m.Reply(values.String()); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+		}
+		return nil
+	case strings.HasPrefix(text, "/check"):
+		if !infos.isAdmin(m.SenderID()) {
+			log.Printf("收到非管理员消息: %d", m.SenderID())
+			if _, err := m.Reply("你没有使用此机器人的权限"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/check"))
+		if content == "" {
+			if _, err := m.Reply("请输入要检查的哈希值"); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
+		}
+		if uid := infos.checkHash(content); uid != 0 {
+			// 注意：infos.BotClient.GetUser 返回的通常是 *telegram.User 对象
+			user, err := infos.BotClient.GetUser(uid)
+			if err != nil {
+				log.Printf("获取用户信息失败: %+v", err)
+				return nil
+			}
+			// 构造平衡的名字显示（处理姓和名）
+			fullName := user.FirstName + user.LastName
+			var values strings.Builder
+			values.WriteString(fmt.Sprintf("• <b>用户 ID</b>: <code>%d</code>\n", uid))
+
+			if fullName != "" {
+				values.WriteString(fmt.Sprintf("• <b>显示名称</b>: %s\n", html.EscapeString(fullName)))
+			}
+			if user.Username != "" {
+				values.WriteString(fmt.Sprintf("• <b>用户昵称</b>: @%s\n", user.Username))
+			}
+			// 使用 HTML 解析模式发送
+			if _, err := m.Reply(values.String(), &telegram.SendOptions{ParseMode: "html"}); err != nil {
+				log.Printf("发送消息失败: %+v", err)
+			}
+			return nil
 		}
 		return nil
 	default:
@@ -807,8 +972,8 @@ func handleMess(m *telegram.NewMessage) error {
 	// 如果是用户发送或转发来的、带有图片/文档/视频的消息, 直接生成直链
 	if m.IsMedia() && (m.Photo() != nil || m.Document() != nil || m.Video() != nil) {
 		link := fmt.Sprintf("%s/stream?cid=%d&mid=%d&cate=bot", strings.TrimSuffix(infos.Conf.Site, "/"), m.ChatID(), m.ID)
-		if infos.Hash != "" {
-			link += fmt.Sprintf("&hash=%s", infos.Hash)
+		if infos.Conf.Password != "" {
+			link += fmt.Sprintf("&hash=%s&uid=%d", infos.calculateHash(m.SenderID()), m.SenderID())
 		}
 		return sendLink(m, link)
 	}
@@ -880,10 +1045,21 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "无效的密码", http.StatusUnauthorized)
 		return
 	}
+
 	hash := params.Get("hash")
-	if hash != "" && infos.Hash != "" && hash != infos.Hash {
-		http.Error(w, "无效的密码", http.StatusUnauthorized)
-		return
+	if hash != "" {
+		value := params.Get("uid")
+		uid, err := strconv.ParseInt(value, 10, 64)
+		if err == nil && uid != 0 {
+			if hash != infos.calculateHash(uid) {
+				http.Error(w, "无效的密码", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			log.Printf("UID无效: %s", value)
+			http.Error(w, "无效的密码", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	cid, err := strconv.ParseInt(params.Get("cid"), 10, 64)
@@ -923,13 +1099,6 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// 获取消息内容 (增加一次重试逻辑, 解决由于长时间闲置导致 Peer 缓存失效的问题)
 	ms, err := infos.Client.GetMessages(cid, &telegram.SearchOption{IDs: []int32{mid}})
-	if err != nil || len(ms) == 0 {
-		log.Printf("首次获取消息失败, 尝试刷新对话列表后重试: cid=%d, mid=%d, err=%v", cid, mid, err)
-		// 刷新一次对话列表（触发库内部自动解析 Entity 并更新 AccessHash 缓存）
-		if _, err := infos.Client.GetDialogs(&telegram.DialogOptions{Limit: 100}); err == nil {
-			ms, err = infos.Client.GetMessages(cid, &telegram.SearchOption{IDs: []int32{mid}})
-		}
-	}
 
 	if err != nil || len(ms) == 0 {
 		log.Printf("获取消息失败: cid=%d, mid=%d, err=%v, count=%d", cid, mid, err, len(ms))
@@ -948,6 +1117,12 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	size := src.File.Size
 	fileName := src.File.Name
 	stream := newStream(r.Context(), infos.UserClient, src.Media(), infos.Conf.Workers, mid, cid, fileName)
+	if src.Message.FwdFrom != nil {
+		if ch, ok := src.Message.FwdFrom.FromID.(*telegram.PeerChannel); ok {
+			stream.CID = ch.ChannelID
+			stream.MID = src.Message.FwdFrom.ChannelPost
+		}
+	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", handleMediaCate(fileName))
@@ -1047,10 +1222,21 @@ func handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "无效的密码", http.StatusUnauthorized)
 		return
 	}
+
 	hash := params.Get("hash")
-	if hash != "" && infos.Hash != "" && hash != infos.Hash {
-		http.Error(w, "无效的密码", http.StatusUnauthorized)
-		return
+	if hash != "" {
+		value := params.Get("uid")
+		uid, err := strconv.ParseInt(value, 10, 64)
+		if err == nil && uid != 0 {
+			if hash != infos.calculateHash(uid) {
+				http.Error(w, "无效的密码", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			log.Printf("UID无效: %s", value)
+			http.Error(w, "无效的密码", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	src := params.Get("link")
@@ -1072,22 +1258,40 @@ func handleLink(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "未找到可下载的媒体", http.StatusNotFound)
 }
 
-func handleTime(seconds uint64) string {
-	days := seconds / 86400
-	hours := (seconds % 86400) / 3600
-	minutes := (seconds % 3600) / 60
-	secs := seconds % 60
-
-	if days > 0 {
-		return fmt.Sprintf("%dd %dh %dm %ds", days, hours, minutes, secs)
-	} else if hours > 0 {
-		return fmt.Sprintf("%dh %dm %ds", hours, minutes, secs)
-	} else if minutes > 0 {
-		return fmt.Sprintf("%dm %ds", minutes, secs)
+func handleTime(secs uint64) string {
+	if secs > 86400 {
+		return fmt.Sprintf("%dd %dh %dm %ds", secs/86400, (secs%86400)/3600, (secs%3600)/60, secs%60)
+	} else if secs > 3600 {
+		return fmt.Sprintf("%dh %dm %ds", secs/3600, (secs%3600)/60, secs%60)
+	} else if secs > 60 {
+		return fmt.Sprintf("%dm %ds", secs/60, secs%60)
 	}
 	return fmt.Sprintf("%ds", secs)
 }
 
+func readLastLines(filePath string, count int) (lines []string, err error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("关闭文件失败: %+v", err)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > count {
+			lines = lines[1:]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return lines, err
+	}
+	return lines, nil
+}
 
 func hackLink(matches [][]string, m *telegram.NewMessage) (links []string) {
 	// 遍历所有匹配到的链接
@@ -1173,14 +1377,13 @@ func hackLink(matches [][]string, m *telegram.NewMessage) (links []string) {
 
 		// 为媒体文件构造下载直链
 		link := fmt.Sprintf("%s/stream?cid=%v&mid=%d&cate=user", strings.TrimSuffix(infos.Conf.Site, "/"), src.ChatID(), src.ID)
-		if infos.Hash != "" {
-			link += fmt.Sprintf("&hash=%s", infos.Hash)
+		if infos.Conf.Password != "" {
+			link += fmt.Sprintf("&hash=%s&uid=%d", infos.calculateHash(m.SenderID()), m.SenderID())
 		}
 		links = append(links, link)
 	}
 	return links
 }
-
 
 // sendLink 发送美化后的下载链接消息
 func sendLink(m *telegram.NewMessage, link string) error {
