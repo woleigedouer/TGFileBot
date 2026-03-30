@@ -61,7 +61,7 @@ type Infos struct {
 
 var infos *Infos
 var startTime time.Time
-var version = "v1.0.3"
+var version = "v1.0.4"
 
 func newInfos(filePath, filesPath string) (*Infos, error) {
 	// 创建日志文件
@@ -458,8 +458,16 @@ func (infos *Infos) startUserBotQR() (err error) {
 				return err
 			}
 		}
-		if _, err := infos.BotClient.SendMessage(infos.Conf.UserID, "正在请求登录二维码..."); err != nil {
+		if ms, err := infos.BotClient.SendMessage(infos.Conf.UserID, "正在请求登录二维码..."); err != nil {
 			log.Printf("发送消息失败: %+v", err)
+		} else {
+			go func() {
+				time.Sleep(35 * time.Second)
+				_, err := ms.Delete()
+				if err != nil {
+					log.Printf("删除消息失败: %+v", err)
+				}
+			}()
 		}
 		// 启动登录流程（会阻塞, 直到登录完成或失败）
 		go func() {
@@ -489,12 +497,19 @@ func (infos *Infos) startUserBotQR() (err error) {
 				return
 			}
 
-			if _, err := infos.BotClient.SendMessage(infos.Conf.UserID, inputFile, &telegram.SendOptions{
+			if ms, err := infos.BotClient.SendMessage(infos.Conf.UserID, inputFile, &telegram.SendOptions{
 				Caption: "请使用手机 Telegram 扫描此二维码登录。二维码有效期 30 秒，如失效请重新发送 /qr",
 			}); err != nil {
 				log.Printf("发送 QR 图片失败: %+v", err)
 			} else {
 				log.Printf("二维码已发送给管理员")
+				go func() {
+					time.Sleep(35 * time.Second)
+					_, err := ms.Delete()
+					if err != nil {
+						log.Printf("删除消息失败: %+v", err)
+					}
+				}()
 			}
 
 			err = qr.WaitLogin()
