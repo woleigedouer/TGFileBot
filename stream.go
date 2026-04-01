@@ -108,6 +108,8 @@ func (stream *Stream) start(contentStart, contentEnd int64) {
 
 // download 是工作协程的核心逻辑，负责循环领取并下载文件分片
 func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
+	log.Printf("携程%d开始下载: cid=%d, mid=%d, fileName=%s", numTask, stream.CID, stream.MID, stream.FileName)
+	defer log.Printf("携程%d结束下载: cid=%d, mid=%d, fileName=%s", numTask, stream.CID, stream.MID, stream.FileName)
 	for {
 		stream.Mutex.Lock()
 		task := newTask()
@@ -153,7 +155,6 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 
 		// 尝试下载该分片，最多重试 3 次
 		for num := 1; num <= 3; num++ {
-			start := time.Now()
 			version := stream.Version.Load()
 			// 调用 Gogram 接口从 Telegram 下载特定范围的文件块
 			content, fileName, err := stream.Client.DownloadChunk(*stream.Src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize), stream.Ctx)
@@ -161,7 +162,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 				switch {
 				case telegram.MatchError(err, "FILE_REFERENCE_EXPIRED"):
 					// 如果报错文件引用过期，则调用 refresh 重新获取消息并更新引用
-					log.Printf("文件引用已过期: cid=%d, mid=%d, version=%d, fileName=%s, numTask=%d", stream.CID, stream.MID, version, stream.FileName, numTask)
+					log.Printf("文件引用已过期: cid=%d, mid=%d, version=%d, fileName=%s, numTask=%d", stream.CID, stream.MID, version, fileName, numTask)
 					if err := stream.refresh(numTask, version); err != nil {
 						task.Error = err
 						task.Cond.L.Lock()
@@ -181,10 +182,6 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 				task.Cond.L.Unlock()
 				return
 			} else {
-				// 获取内容成功，计算用时
-				duration := time.Since(start)
-				log.Printf("切片下载完成: cid=%d, mid=%d, start=%d, end=%d, content=%d, fileName=%s, num=%d, numTask=%d, duration=%.2fs", stream.CID, stream.MID, task.ContentStart, task.ContentEnd, len(content), fileName, num, numTask, duration.Seconds())
-
 				task.Cond.L.Lock()
 				// 根据初始偏移量截取内容
 				content = content[task.Offset:]

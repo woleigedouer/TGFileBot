@@ -3,24 +3,25 @@ package main
 import (
 	"bufio" // 用于读取文件流
 	"context"
-	"crypto/md5"    // 用于计算哈希值
-	"encoding/hex"  // 用于进行十六进制编码
-	"encoding/json" // 用于处理 JSON 数据
-	"errors"        // 用于处理错误
-	"flag"          // 用于处理命令行参数
-	"fmt"           // 用于格式化字符串
-	"html"          // 用于转义 HTML 字符
-	"io"            // 用于处理文件流
-	"log"           // 用于记录程序日志
-	"net/http"      // 用于启动 HTTP 服务器和处理请求
-	"os"            // 用于处理操作系统信号
-	"os/signal"     // 用于处理操作系统信号
-	"path/filepath" // 用于保存文件路径操作
-	"regexp"        // 用于正则表达式匹配（链接解析）
-	"slices"        // 用于切片操作
-	"strconv"       // 用于字符串和数值的相互转换
-	"strings"       // 用于字符串处理
-	"sync"          // 用于并发锁
+	"crypto/md5"        // 用于计算哈希值
+	"encoding/hex"      // 用于进行十六进制编码
+	"encoding/json"     // 用于处理 JSON 数据
+	"errors"            // 用于处理错误
+	"flag"              // 用于处理命令行参数
+	"fmt"               // 用于格式化字符串
+	"html"              // 用于转义 HTML 字符
+	"io"                // 用于处理文件流
+	"log"               // 用于记录程序日志
+	"net/http"          // 用于启动 HTTP 服务器和处理请求
+	handleUrl "net/url" // 用于处理 URL 相关操作
+	"os"                // 用于处理操作系统信号
+	"os/signal"         // 用于处理操作系统信号
+	"path/filepath"     // 用于保存文件路径操作
+	"regexp"            // 用于正则表达式匹配（链接解析）
+	"slices"            // 用于切片操作
+	"strconv"           // 用于字符串和数值的相互转换
+	"strings"           // 用于字符串处理
+	"sync"              // 用于并发锁
 	"sync/atomic"
 	"syscall" // 用于处理操作系统信号
 	"time"    // 用于处理时间相关逻辑
@@ -816,7 +817,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				src = "userBot 已登录"
 			}
 		} else {
-			src = "仅限内部使用"
+			src = "仅限内部使用, 请保管好你的HASH密码与UID"
 		}
 		sendMS(m, src, nil, 60)
 		return nil
@@ -1129,6 +1130,50 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 		}
 		return nil
+	case strings.HasPrefix(text, "/list"):
+		if !infos.isAdmin(m.SenderID()) {
+			sendMS(m, "你没有使用此命令的权限", nil, 60)
+			return nil
+		}
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/list"))
+		if content == "" {
+			sendMS(m, "请提供要列出的类别: ", nil, 60)
+			return nil
+		}
+		switch content {
+		case "channels":
+			var values strings.Builder
+			count := len(infos.Conf.Channels)
+			if count == 0 {
+				sendMS(m, "⚠️ <b>暂无搜索频道别名</b>", nil, 60)
+				break
+			}
+			values.WriteString(fmt.Sprintf("🔍 <b>搜索频道别名列表</b> (共 %d 个)\n", count))
+			values.WriteString("━━━━━━━━━━━━━━━\n")
+			for _, channel := range infos.Conf.Channels {
+				if !strings.HasPrefix(channel, "@") {
+					channel = "@" + channel
+				}
+				values.WriteString(fmt.Sprintf("• %s\n", html.EscapeString(channel)))
+			}
+			sendMS(m, values.String(), nil, 60)
+		case "ids":
+			var values strings.Builder
+			count := len(infos.Conf.WhiteIDs)
+			if count == 0 {
+				sendMS(m, "⚠️ <b>白名单目前为空</b>", nil, 60)
+				break
+			}
+			values.WriteString(fmt.Sprintf("🛡️ <b>白名单 ID 列表</b> (共 %d 个)\n", count))
+			values.WriteString("━━━━━━━━━━━━━━━\n")
+			for _, whiteID := range infos.Conf.WhiteIDs {
+				values.WriteString(fmt.Sprintf("• <code>%d</code>\n", whiteID))
+			}
+			sendMS(m, values.String(), nil, 60)
+		default:
+			sendMS(m, "类别错误", nil, 60)
+		}
+		return nil
 	case strings.HasPrefix(text, "/port"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
@@ -1289,6 +1334,11 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := r.URL.Query()
+	err := checkPass(params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+	}
+
 	keywords := params.Get("keywords")
 	if keywords == "" {
 		http.Error(w, "缺少关键词", http.StatusBadRequest)
@@ -1332,11 +1382,15 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		content, err := json.Marshal(items)
 		if err != nil {
-			fmt.Println("JSON序列化失败:", err)
+			log.Printf("JSON序列化失败: %+v", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(content)
+		n, err := w.Write(content)
+		if err != nil {
+			log.Printf("写入长度 %d 的响应体失败: %+v", n, err)
+			return
+		}
 	}()
 
 	for {
@@ -1361,29 +1415,9 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 func handleStream(w http.ResponseWriter, r *http.Request) {
 	// 1. 获取 URL 参数并完成身份校验
 	params := r.URL.Query()
-	if infos.Conf.Password != "" {
-		hash := params.Get("hash") // 基于用户 ID 的哈希校验
-		password := params.Get("key")
-		switch {
-		case password != "":
-			if password != infos.Conf.Password {
-				http.Error(w, "无效的密码", http.StatusUnauthorized)
-				return
-			}
-		case hash != "":
-			value := params.Get("uid")
-			uid, err := strconv.ParseInt(value, 10, 64)
-			if err == nil && uid != 0 {
-				if hash != infos.calculateHash(uid) {
-					http.Error(w, "无效的密码", http.StatusUnauthorized)
-					return
-				}
-			} else {
-				log.Printf("UID无效: %s", value)
-				http.Error(w, "无效的密码", http.StatusUnauthorized)
-				return
-			}
-		}
+	err := checkPass(params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 	}
 
 	// 2. 解析频道 ID 和 消息 ID
@@ -1563,32 +1597,9 @@ func handleLink(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
 
 	// 1. 验证访问权限 (密码或哈希)
-	if infos.Conf.Password != "" {
-		hash := params.Get("hash")
-		password := params.Get("key")
-		switch {
-		case password != "":
-			res.Pass = password
-			if password != infos.Conf.Password {
-				http.Error(w, "无效的密码", http.StatusUnauthorized)
-				return
-			}
-		case hash != "":
-			res.Hash = hash
-			value := params.Get("uid")
-			uid, err := strconv.ParseInt(value, 10, 64)
-			if err == nil && uid != 0 {
-				res.UID = uid
-				if hash != infos.calculateHash(uid) {
-					http.Error(w, "无效的密码", http.StatusUnauthorized)
-					return
-				}
-			} else {
-				log.Printf("UID无效: %s", value)
-				http.Error(w, "无效的密码", http.StatusUnauthorized)
-				return
-			}
-		}
+	err := checkPass(params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 	}
 
 	// 2. 获取目标 Telegram 链接
@@ -1611,6 +1622,31 @@ func handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "未找到可下载的媒体", http.StatusNotFound)
+}
+
+func checkPass(params handleUrl.Values) error {
+	if infos.Conf.Password != "" {
+		hash := params.Get("hash") // 基于用户 ID 的哈希校验
+		password := params.Get("key")
+		switch {
+		case password != "":
+			if password != infos.Conf.Password {
+				return errors.New("无效的密码")
+			}
+		case hash != "":
+			value := params.Get("uid")
+			uid, err := strconv.ParseInt(value, 10, 64)
+			if err == nil && uid != 0 {
+				if hash != infos.calculateHash(uid) {
+					return errors.New("无效的哈希密码")
+				}
+			} else {
+				log.Printf("UID无效: %s", value)
+				return errors.New("无效的UID")
+			}
+		}
+	}
+	return nil
 }
 
 func handleTime(secs uint64) string {
