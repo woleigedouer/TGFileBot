@@ -160,7 +160,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 		for num := 1; num <= 3; num++ {
 			version := stream.Version.Load()
 			// 调用 Gogram 接口从 Telegram 下载特定范围的文件块
-			content, fileName, err := stream.Client.DownloadChunk(*stream.Src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize), stream.Ctx)
+			content, fileName, err := stream.Client.DownloadChunk(*stream.Src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize), false, stream.Ctx, 90*time.Second)
 			if err != nil {
 				switch {
 				case telegram.MatchError(err, "FILE_REFERENCE_EXPIRED"):

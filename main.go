@@ -345,6 +345,92 @@ func (infos *Infos) startBot() (err error) {
 
 	// 注册 Bot 命令处理函数
 	client.On(telegram.OnMessage, handleBotCommand)
+	userID, err := client.ResolvePeer(infos.Conf.UserID)
+	if err != nil {
+		log.Printf("解析用户 ID 失败: %v", err)
+		return
+	}
+	commands := []*telegram.BotCommand{
+		{
+			Command:     "qr",
+			Description: "获取登录二维码",
+		},
+		{
+			Command:     "phone",
+			Description: "输入手机号登录",
+		},
+		{
+			Command:     "code",
+			Description: "输入验证码登录",
+		},
+		{
+			Command:     "pass",
+			Description: "输入2FA密码登录",
+		},
+	}
+	commonCommands := []*telegram.BotCommand{
+		{
+			Command:     "dc",
+			Description: "设置客户端默认DC",
+		},
+		{
+			Command:     "allow",
+			Description: "添加白名单",
+		},
+		{
+			Command:     "disallow",
+			Description: "移除白名单",
+		},
+		{
+			Command:     "add",
+			Description: "添加搜索频道",
+		},
+		{
+			Command:     "del",
+			Description: "移除搜索频道",
+		},
+		{
+			Command:     "list",
+			Description: "列出搜索频道或白名单",
+		},
+		{
+			Command:     "info",
+			Description: "获取程序运行信息",
+		},
+		{
+			Command:     "size",
+			Description: "设置程序缓存大小",
+		},
+		{
+			Command:     "site",
+			Description: "设置反代域名",
+		},
+		{
+			Command:     "port",
+			Description: "设置HTTP服务端口",
+		},
+		{
+			Command:     "check",
+			Description: "查找HASH对应的用户信息",
+		},
+		{
+			Command:     "workers",
+			Description: "设置并发数",
+		},
+		{
+			Command:     "channel",
+			Description: "设置绑定频道",
+		},
+		{
+			Command:     "password",
+			Description: "设置接口访问密码",
+		},
+	}
+	commands = append(commands, commonCommands...)
+
+	client.SetBotCommands(commands, &userID)
+	client.SetBotCommands(commonCommands, nil)
+
 	log.Printf("Bot 启动成功")
 
 	infos.Mutex.Lock()
@@ -1087,15 +1173,15 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, "并发数必须大于 0", nil, 60)
 			return nil
 		}
-		if num > 4 {
-			sendMS(m, "并发数不建议超过 4, 否则可能导致下载失败甚至封号", nil, 60)
-			return nil
-		}
 		infos.Mutex.Lock()
 		infos.Conf.Workers = num
 		infos.HasNew = true
 		infos.Mutex.Unlock()
-		sendMS(m, fmt.Sprintf("并发数已设置为: %d", num), nil, 60)
+		src := fmt.Sprintf("并发数已设置为: %d", num)
+		if num > 4 {
+			src += ", 当前并发数较大, 容易引起下载失败甚至封号, 请谨慎设置"
+		}
+		sendMS(m, src, nil, 60)
 		return nil
 	case strings.HasPrefix(text, "/check"):
 		if !infos.isAdmin(m.SenderID()) {
@@ -2033,16 +2119,16 @@ func formatFileSize(size int64) string {
 	if size < unit {
 		return fmt.Sprintf("%dB", size)
 	}
-	
+
 	units := []string{"B", "K", "M"}
 	var count int
 	var result = float64(size)
-	
+
 	for result >= unit && count < len(units)-1 {
 		result /= unit
 		count++
 	}
-	
+
 	// 如果是整数则不保留小数，有小数则保留两位
 	if result == float64(int64(result)) {
 		return fmt.Sprintf("%.0f%s", result, units[count])
