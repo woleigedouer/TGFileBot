@@ -107,7 +107,7 @@ type Infos struct {
 var infos *Infos
 var offSets *OffSets
 var startTime time.Time
-var version = "v1.0.6"
+var version = "v1.0.7"
 
 // main 是程序的入口函数
 func main() {
@@ -878,7 +878,6 @@ func (infos *Infos) search(channel, keywords string, page, limit int, offset int
 		}
 	}
 
-	
 	results := [][]telegram.NewMessage{ms}
 
 	if len(rids) > 0 {
@@ -901,12 +900,14 @@ func (infos *Infos) search(channel, keywords string, page, limit int, offset int
 			if m.File == nil {
 				continue
 			}
-			if items.Channel == "" {
-				items.Channel = strings.TrimSpace(m.Channel.Title)
+			if len(rids) > 0 {
+				if value, ok := rids[m.Message.GroupedID]; !ok || !value {
+					continue
+				}
 			}
 
-			if value, ok := rids[m.Message.GroupedID]; !ok || !value {
-				continue
+			if items.Channel == "" {
+				items.Channel = strings.TrimSpace(m.Channel.Title)
 			}
 
 			name := strings.TrimSpace(m.File.Name)
@@ -936,10 +937,12 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 		// 返回服务器状态 JSON
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		content := map[string]any{
-			"message": "服务器正在运行。",
-			"ok":      true,
-			"uptime":  handleTime(uint64(time.Since(startTime).Seconds())), // 运行时间
-			"version": version,
+			"版本":   version,
+			"域名":   infos.Conf.Site,
+			"端口":   infos.Conf.Port,
+			"缓存":   formatFileSize(infos.Conf.MaxSize),
+			"并发":   infos.Conf.Workers,
+			"运行时间": handleTime(uint64(time.Since(startTime).Seconds())),
 		}
 		err := json.NewEncoder(w).Encode(content)
 		if err != nil {
