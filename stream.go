@@ -237,7 +237,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 					})
 					infos.HeadCache[cacheKey] = values
 				}
-			case task.ContentStart >= stream.ContentSize-stream.TailSize && task.ContentEnd <= stream.ContentSize:
+			case task.ContentStart >= stream.ContentSize-stream.TailSize:
 				if values, ok := infos.TailCache[cacheKey]; ok {
 					values.Time = time.Now()
 					values.Contents = append(values.Contents, MediaContent{
@@ -261,15 +261,18 @@ func (task *Task) handleContent(content []byte, contentEnd int64) {
 	task.Cond.L.Lock()
 	// 根据初始偏移量截取内容
 	content = content[task.Offset:]
+	actualStart := task.ContentStart + task.Offset
+
 	// 裁剪末尾：最后一个分片可能超出实际请求范围（contentEnd），
 	// 防止写入 HTTP 响应时超过声明的 Content-Length
 	if task.ContentEnd > contentEnd {
-		overshoot := task.ContentEnd - contentEnd
-		if int64(len(content)) > overshoot {
-			content = content[:int64(len(content))-overshoot]
+		wantedLength := contentEnd - actualStart + 1
+		if wantedLength > 0 && int64(len(content)) > wantedLength {
+			content = content[:wantedLength]
 		}
 		task.ContentEnd = contentEnd
 	}
+
 	if task.Content == nil {
 		task.Content = &content
 	} else {
@@ -301,7 +304,7 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, contentEnd int64)
 			log.Printf("头部缓存已初始化: cid=%d, mid=%d", stream.CID, stream.MID)
 			return false
 		}
-	case task.ContentStart >= stream.ContentSize-stream.TailSize && task.ContentEnd <= stream.ContentSize-1:
+	case task.ContentStart >= stream.ContentSize-stream.TailSize:
 		if values, ok := infos.TailCache[cacheKey]; ok {
 			for _, value := range values.Contents {
 				if value.Start == task.ContentStart && value.End == task.ContentEnd {
