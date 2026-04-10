@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	handleUrl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,10 +15,10 @@ import (
 	"github.com/amarnathcjd/gogram/telegram"
 )
 
-// handleMain 是 HTTP 服务的主分发函数，根据路径路由到不同的处理器
+// handleMain 是 HTTP 服务的主分发函数, 根据路径路由到不同的处理器
 func handleMain(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	// 标准化路径处理，移除尾部斜杠
+	// 标准化路径处理, 移除尾部斜杠
 	if path != "/" {
 		path = strings.TrimSuffix(path, "/")
 	}
@@ -59,9 +58,9 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStream 处理来自 HTTP 的文件流式读取请求
-// 该函数实现了 Range 分段下载支持，允许像播放普通 mp4 文件一样拖动进度条
+// 该函数实现了 Range 分段下载支持, 允许像播放普通 mp4 文件一样拖动进度条
 func handleStream(w http.ResponseWriter, r *http.Request) {
-	// 0. 检验 HTTP 请求类型，过滤非法请求
+	// 0. 检验 HTTP 请求类型, 过滤非法请求
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, fmt.Sprintf("不支持的请求方法: %s", r.Method), http.StatusMethodNotAllowed)
 		return
@@ -106,7 +105,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// 3. 选择下载客户端 (Bot 或 UserBot)
 	cate := params.Get("cate")
-	if cate == "user" && infos.Status == 3 {
+	if cate == "user" && infos.Status.Load() == 3 {
 		infos.Client = infos.UserClient
 	} else {
 		infos.Client = infos.BotClient
@@ -134,7 +133,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	// 创建新的 Stream 流管理对象
 	stream := newStream(r.Context(), infos.Client, src.Media(), infos.Conf.Workers, mid, cid, src.File.Size, fileName)
 
-	// 如果是转发的消息，重定向源频道以确保分片下载稳定性
+	// 如果是转发的消息, 重定向源频道以确保分片下载稳定性
 	if src.Message.FwdFrom != nil {
 		if ch, ok := src.Message.FwdFrom.FromID.(*telegram.PeerChannel); ok {
 			stream.CID = ch.ChannelID
@@ -163,7 +162,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		w.WriteHeader(http.StatusOK)
 	} else {
-		// 处理 Range 范围，例如：bytes=0-499 或 bytes=-500
+		// 处理 Range 范围, 例如：bytes=0-499 或 bytes=-500
 		rangeStr := strings.TrimSpace(strings.TrimPrefix(rangeHeader, "bytes="))
 		parts := strings.SplitN(rangeStr, "-", 2)
 		if len(parts) == 2 {
@@ -213,20 +212,24 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("开始下载: cid=%d, mid=%d, name=%s, start=%d, end=%d", cid, mid, fileName, start, end)
 
-	// 如果是 HEAD 请求，只返回首部信息后提早结束避免开启流媒体下载协程
+	// 如果是 HEAD 请求, 只返回首部信息后提早结束避免开启流媒体下载协程
 	if r.Method == http.MethodHead {
 		return
 	}
 
-	// 8. 缓存逻辑：检查头部/尾部缓存是否命中，并决定实际下载起点
+	// 8. 缓存逻辑：检查头部/尾部缓存是否命中, 并决定实际下载起点
 	stream.HeadSize, stream.TailSize = mediaCacheSizes(size)
 
 	// 9. 启动并发下载协程
 	go stream.start(start, end)
-	defer stream.clean() // 结束时清理
+	defer func() {
+		go stream.clean()
+	}() // 结束时清理
 
 	// 10. 循环从下载管道读取分片并写入 HTTP 响应体
 	if r.Method == http.MethodGet {
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
 		for {
 			select {
 			case <-r.Context().Done():
@@ -245,26 +248,26 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 					log.Printf("流式传输文件已取消: cid=%d, mid=%d, name=%s", cid, mid, fileName)
 					return
 				case <-task.Done:
-				}
+					if task.Error != nil {
+						log.Printf("切片下载出错: cid=%d, mid=%d, start=%d, end=%d, name=%s, error=%+v", cid, mid, task.ContentStart, task.ContentEnd, fileName, task.Error)
+						return
+					}
 
-				if task.Error != nil {
-					log.Printf("切片下载出错: cid=%d, mid=%d, start=%d, end=%d, name=%s, error=%+v", cid, mid, task.ContentStart, task.ContentEnd, fileName, task.Error)
-					return
-				}
+					// 写入响应
+					if _, err := w.Write(task.Content); err != nil {
+						log.Printf("写入文件流时出错: cid=%d, mid=%d, err=%v", cid, mid, err)
+						return
+					}
 
-				// 写入响应
-				if _, err := w.Write(task.Content); err != nil {
-					log.Printf("写入文件流时出错: cid=%d, mid=%d, err=%v", cid, mid, err)
-					return
+					// 检查是否已经写完当前请求的所有范围
+					if task.ContentEnd >= end {
+						log.Printf("流式传输文件已完成: cid=%d, mid=%d", cid, mid)
+						return
+					}
+					task = nil
+					timer.Reset(30 * time.Second)
 				}
-
-				// 检查是否已经写完当前请求的所有范围
-				if task.ContentEnd >= end {
-					log.Printf("流式传输文件已完成: cid=%d, mid=%d", cid, mid)
-					return
-				}
-				task = nil
-			case <-time.After(30 * time.Second):
+			case <-timer.C:
 				log.Printf("流式传输文件超时: cid=%d, mid=%d, name=%s", cid, mid, fileName)
 				return
 			}
@@ -272,7 +275,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSearch 处理搜索请求，并发搜索多个频道
+// handleSearch 处理搜索请求, 并发搜索多个频道
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	if infos.UserClient == nil {
 		http.Error(w, "userBot 未登录, 无法使用搜索功能", http.StatusUnauthorized)
@@ -308,9 +311,13 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	count := atomic.Int64{}
-	results := make(chan Items, len(infos.Conf.Channels))
+	infos.Mutex.Lock() // 加锁保护读取过程
+	channels := make([]string, len(infos.Conf.Channels))
+	copy(channels, infos.Conf.Channels)
+	infos.Mutex.Unlock() // 读取完立即解锁
+	results := make(chan Items, len(channels))
 
-	for _, channel := range infos.Conf.Channels {
+	for _, channel := range channels {
 		count.Add(1)
 		channel = strings.TrimPrefix(channel, "@")
 		go func(channel string) {
@@ -368,7 +375,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleLink 处理链接提取请求，将 Telegram 消息链接转换为直链下载地址并执行重定向
+// handleLink 处理链接提取请求, 将 Telegram 消息链接转换为直链下载地址并执行重定向
 func handleLink(w http.ResponseWriter, r *http.Request) {
 	res := HackLink{}
 	params := r.URL.Query()
@@ -477,6 +484,3 @@ func evictOldestCache(cache map[string]MediaCache, maxCount int) {
 		log.Printf("媒体缓存已淘汰最旧条目: key=%s", oldestKey)
 	}
 }
-
-// 编译期确保 checkPass 使用了 handleUrl 包（避免 import cycle）
-var _ handleUrl.Values

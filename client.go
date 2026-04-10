@@ -12,7 +12,7 @@ import (
 	"github.com/amarnathcjd/gogram/telegram"
 )
 
-// startBot 创建并连接 Bot 客户端，注册消息处理器并设置命令菜单
+// startBot 创建并连接 Bot 客户端, 注册消息处理器并设置命令菜单
 func (infos *Infos) startBot() (err error) {
 	botID := strconv.FormatInt(infos.BotID, 10)
 	if botID != "" && botID != "0" {
@@ -51,7 +51,7 @@ func (infos *Infos) startBot() (err error) {
 	client.On(telegram.OnMessage, handleBotCommand)
 
 	go func() {
-		// 先清空默认的命令列表，确保没有权限的用户什么也看不到
+		// 先清空默认的命令列表, 确保没有权限的用户什么也看不到
 		_, err := client.SetBotCommands([]*telegram.BotCommand{}, nil)
 		if err != nil {
 			log.Printf("清空默认命令失败: %+v", err)
@@ -171,7 +171,7 @@ func (infos *Infos) startBot() (err error) {
 	return nil
 }
 
-// userBotClient 创建并连接 UserBot 客户端（不执行登录，仅建立连接）
+// userBotClient 创建并连接 UserBot 客户端（不执行登录, 仅建立连接）
 func (infos *Infos) userBotClient() (err error) {
 	// 清理缓存
 	userID := strconv.FormatInt(infos.Conf.UserID, 10)
@@ -212,15 +212,15 @@ func (infos *Infos) userBotClient() (err error) {
 // startUserBot 发起手机号登录流程
 func (infos *Infos) startUserBot(phone string) (err error) {
 	infos.Mutex.Lock()
-	switch infos.Status {
+	switch infos.Status.Load() {
 	case 1, 2:
-		// 正在进行验证码或密码输入状态，不允许重复发起
+		// 正在进行验证码或密码输入状态, 不允许重复发起
 		infos.Mutex.Unlock()
 		err = errors.New("已有登录流程正在进行")
 		log.Printf("UserBot 登录失败: %+v", err)
 		return err
 	case 3:
-		// 已登录状态，若客户端实例丢失则尝试重建
+		// 已登录状态, 若客户端实例丢失则尝试重建
 		infos.Mutex.Unlock()
 		if infos.UserClient == nil {
 			if err := infos.userBotClient(); err != nil {
@@ -231,7 +231,7 @@ func (infos *Infos) startUserBot(phone string) (err error) {
 		}
 		return nil
 	default:
-		// 未登录状态，开始新的登录流程
+		// 未登录状态, 开始新的登录流程
 		infos.Mutex.Unlock()
 		if infos.UserClient == nil {
 			if err := infos.userBotClient(); err != nil {
@@ -273,7 +273,7 @@ func (infos *Infos) startUserBot(phone string) (err error) {
 // startUserBotQR 发起二维码登录流程
 func (infos *Infos) startUserBotQR() (err error) {
 	infos.Mutex.Lock()
-	switch infos.Status {
+	switch infos.Status.Load() {
 	case 1, 2:
 		infos.Mutex.Unlock()
 		err = errors.New("已有登录流程正在进行")
@@ -290,7 +290,7 @@ func (infos *Infos) startUserBotQR() (err error) {
 		}
 		return nil
 	default:
-		infos.Status = 1
+		infos.Status.Store(1)
 		infos.Mutex.Unlock()
 		if infos.UserClient == nil {
 			if err := infos.userBotClient(); err != nil {
@@ -328,7 +328,7 @@ func (infos *Infos) startUserBotQR() (err error) {
 				log.Printf("上传 QR 文件失败: %+v", err)
 				return
 			}
-			sendMS(nil, src, &telegram.SendOptions{Caption: "请使用手机 Telegram 扫描此二维码登录。二维码有效期 30 秒，如失效请重新发送 /qr"}, 35)
+			sendMS(nil, src, &telegram.SendOptions{Caption: "请使用手机 Telegram 扫描此二维码登录。二维码有效期 30 秒, 如失效请重新发送 /qr"}, 35)
 			err = qr.WaitLogin()
 			if err != nil {
 				if !strings.Contains(err.Error(), "scanning again") {
@@ -356,7 +356,7 @@ func (infos *Infos) checkStatus() (err error) {
 	if err != nil {
 		log.Printf("获取用户信息失败: %v", err)
 		infos.Mutex.Lock()
-		infos.Status = 0
+		infos.Status.Store(0)
 		infos.Mutex.Unlock()
 		return nil
 	}
@@ -368,7 +368,7 @@ func (infos *Infos) checkStatus() (err error) {
 		}
 		sendMS(nil, fmt.Sprintf("登录成功! 用户: %s", name), nil)
 		infos.Mutex.Lock()
-		infos.Status = 3
+		infos.Status.Store(3)
 		infos.Mutex.Unlock()
 		return nil
 	} else {
@@ -383,7 +383,7 @@ func (infos *Infos) checkStatus() (err error) {
 	}
 }
 
-// resetStatus 断开 UserBot 连接并清理 session/cache，将状态重置为未登录
+// resetStatus 断开 UserBot 连接并清理 session/cache, 将状态重置为未登录
 func (infos *Infos) resetStatus() {
 	// 1. 断开连接并清理句柄
 	if err := infos.UserClient.Disconnect(); err != nil {
@@ -396,15 +396,15 @@ func (infos *Infos) resetStatus() {
 	// 3. 重置内存状态
 	infos.Mutex.Lock()
 	infos.UserClient = nil
-	infos.Status = 0
+	infos.Status.Store(0)
 	infos.Mutex.Unlock()
 }
 
-// code 是登录回调，暂停协程等待用户通过 Bot 发送验证码
+// code 是登录回调, 暂停协程等待用户通过 Bot 发送验证码
 func (infos *Infos) code() (code string, err error) {
-	if infos.Status == 0 {
+	if infos.Status.Load() == 0 {
 		infos.Mutex.Lock()
-		infos.Status = 1
+		infos.Status.Store(1)
 		infos.Mutex.Unlock()
 		sendMS(nil, "等待用户输入 /code 验证码...", nil, 120)
 		select {
@@ -427,7 +427,7 @@ func (infos *Infos) submitCode(str string) (err error) {
 	infos.Mutex.Lock()
 	defer infos.Mutex.Unlock()
 
-	if infos.Status != 1 {
+	if infos.Status.Load() != 1 {
 		err = errors.New("当前状态不是等待验证码")
 		sendMS(nil, err.Error(), nil, 60)
 		return err
@@ -446,11 +446,11 @@ func (infos *Infos) submitCode(str string) (err error) {
 	return nil
 }
 
-// pass 是登录回调，暂停协程等待用户通过 Bot 发送 2FA 密码
+// pass 是登录回调, 暂停协程等待用户通过 Bot 发送 2FA 密码
 func (infos *Infos) pass() (pass string, err error) {
-	if infos.Status == 1 {
+	if infos.Status.Load() == 1 {
 		infos.Mutex.Lock()
-		infos.Status = 2
+		infos.Status.Store(2)
 		infos.Mutex.Unlock()
 		sendMS(nil, "等待用户输入 /pass 2FA密码...", nil, 120)
 		select {
@@ -473,7 +473,7 @@ func (infos *Infos) submitPass(pass string) (err error) {
 	infos.Mutex.Lock()
 	defer infos.Mutex.Unlock()
 
-	if infos.Status != 2 {
+	if infos.Status.Load() != 2 {
 		err = errors.New("当前状态不是等待2FA密码")
 		sendMS(nil, err.Error(), nil, 60)
 		return err

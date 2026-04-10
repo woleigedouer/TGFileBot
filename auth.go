@@ -6,43 +6,58 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-
 	handleUrl "net/url"
+	"strconv"
 )
 
-// buildSets 根据配置重建 AdminMap 和 WhiteMap 以支持 O(1) 权限查询
-func (infos *Infos) buildSets() {
-	infos.AdminMap = make(map[int64]struct{}, len(infos.Conf.AdminIDs))
-	for _, id := range infos.Conf.AdminIDs {
-		infos.AdminMap[id] = struct{}{}
+// buildIDs 根据配置重建 IDs 以支持 O(1) 权限查询
+func (infos *Infos) buildIDs() {
+	infos.Mutex.Lock()
+	defer infos.Mutex.Unlock()
+	// 检查UserID是否在IDs中
+	if value, ok := infos.IDs[infos.Conf.UserID]; !ok {
+		value.IsAdmin = true
+		value.IsWhite = true
+		infos.IDs[infos.Conf.UserID] = value
 	}
-	infos.WhiteMap = make(map[int64]struct{}, len(infos.Conf.WhiteIDs))
+
+	// 检查AdminIDs是否在IDs中
+	for _, id := range infos.Conf.AdminIDs {
+		if value, ok := infos.IDs[id]; !ok {
+			value.IsAdmin = true
+			value.IsWhite = true
+			infos.IDs[id] = value
+		}
+	}
+
+	// 检查WhiteIDs是否在IDs中
 	for _, id := range infos.Conf.WhiteIDs {
-		infos.WhiteMap[id] = struct{}{}
+		if value, ok := infos.IDs[id]; !ok {
+			value.IsWhite = true
+			infos.IDs[id] = value
+		}
 	}
 }
 
 func (infos *Infos) isAdmin(id int64) bool {
-	if id == infos.Conf.UserID {
-		return true
+	infos.Mutex.Lock()
+	defer infos.Mutex.Unlock()
+	if value, ok := infos.IDs[id]; ok {
+		return value.IsAdmin
 	}
-	_, ok := infos.AdminMap[id]
-	return ok
+	return false
 }
 
 func (infos *Infos) isWhite(id int64) bool {
-	if id == infos.BotID {
-		return true
+	infos.Mutex.Lock()
+	defer infos.Mutex.Unlock()
+	if value, ok := infos.IDs[id]; ok {
+		return value.IsWhite
 	}
-	if infos.isAdmin(id) {
-		return true
-	}
-	_, ok := infos.WhiteMap[id]
-	return ok
+	return false
 }
 
-// calculateHash 为指定用户 ID 生成 6 位 MD5 哈希，用于鉴权
+// calculateHash 为指定用户 ID 生成 6 位 MD5 哈希, 用于鉴权
 func (infos *Infos) calculateHash(userID int64) string {
 	if infos.Conf.Password == "" {
 		return ""
@@ -52,36 +67,21 @@ func (infos *Infos) calculateHash(userID int64) string {
 	return hex.EncodeToString(src[:])[:6]
 }
 
-// checkHash 根据哈希值查找对应的用户 ID，返回 0 表示未找到
+// checkHash 根据哈希值查找对应的用户 ID, 返回 0 表示未找到
 func (infos *Infos) checkHash(hash string) int64 {
+	infos.Mutex.Lock()
+	defer infos.Mutex.Unlock()
 	if hash == "" {
 		return 0
 	}
-	if value, ok := infos.IDs[infos.Conf.UserID]; ok && value != "" {
-		if value == hash {
-			return infos.Conf.UserID
-		}
-	} else {
-		infos.IDs[infos.Conf.UserID] = infos.calculateHash(infos.Conf.UserID)
-	}
 
-	for _, id := range infos.Conf.AdminIDs {
-		if value, ok := infos.IDs[id]; ok && value != "" {
-			if value == hash {
-				return id
-			}
-		} else {
-			infos.IDs[id] = infos.calculateHash(id)
-		}
-	}
-
-	for _, id := range infos.Conf.WhiteIDs {
-		if value, ok := infos.IDs[id]; ok && value != "" {
-			if value == hash {
-				return id
-			}
-		} else {
-			infos.IDs[id] = infos.calculateHash(id)
+	for key, value := range infos.IDs {
+		switch value.Hash {
+		case "":
+			value.Hash = infos.calculateHash(key)
+			infos.IDs[key] = value
+		case hash:
+			return key
 		}
 	}
 	return 0

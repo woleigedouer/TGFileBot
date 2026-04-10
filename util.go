@@ -44,7 +44,7 @@ func formatFileSize(size int64) string {
 		count++
 	}
 
-	// 如果是整数则不保留小数，有小数则保留两位
+	// 如果是整数则不保留小数, 有小数则保留两位
 	if result == float64(int64(result)) {
 		return fmt.Sprintf("%.0f%s", result, units[count])
 	}
@@ -119,7 +119,7 @@ func readLastLines(filePath, src string, count int) (lines []string, err error) 
 		if re.MatchString(scanner.Text()) {
 			lines = append(lines, scanner.Text())
 		}
-		// 超过行数限制后，舍弃旧行（滑动窗口效果）
+		// 超过行数限制后, 舍弃旧行（滑动窗口效果）
 		if len(lines) > count {
 			lines = lines[1:]
 		}

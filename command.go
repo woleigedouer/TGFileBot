@@ -15,22 +15,6 @@ import (
 
 // handleBotCommand 是 Bot 的总消息分发入口，处理所有管理指令
 func handleBotCommand(m *telegram.NewMessage) error {
-	defer func() {
-		infos.Mutex.Lock()
-		hasNew := infos.HasNew
-		infos.HasNew = false
-		infos.Mutex.Unlock()
-
-		if hasNew {
-			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
-				log.Printf("保存配置文件失败: %+v", err)
-			}
-			infos.Mutex.Lock()
-			infos.buildSets()
-			infos.Mutex.Unlock()
-		}
-	}()
-
 	if m.Sender.ID == infos.BotID {
 		return nil
 	}
@@ -46,7 +30,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 
 		var src string
 		if m.SenderID() == infos.Conf.UserID {
-			switch infos.Status {
+			switch infos.Status.Load() {
 			case 0:
 				src = "userBot 未登录, 仅使用 Bot 或发送 /phone 手机号登录 userBot"
 			case 1:
@@ -78,9 +62,16 @@ func handleBotCommand(m *telegram.NewMessage) error {
 				sendMS(m, fmt.Sprintf("白名单中已存在: %d", whiteID), nil, 60)
 				return nil
 			}
+
 			infos.Mutex.Lock()
+			value := ID{
+				IsWhite: true,
+			}
+			infos.IDs[whiteID] = value
 			infos.Conf.WhiteIDs = append(infos.Conf.WhiteIDs, whiteID)
-			infos.HasNew = true
+			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+				log.Printf("保存配置文件失败: %+v", err)
+			}
 			infos.Mutex.Unlock()
 			sendMS(m, fmt.Sprintf("添加白名单成功: %d", whiteID), nil, 60)
 		}
@@ -100,10 +91,13 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		if whiteID != 0 {
 			if slices.Contains(infos.Conf.WhiteIDs, whiteID) {
 				infos.Mutex.Lock()
+				delete(infos.IDs, whiteID)
 				infos.Conf.WhiteIDs = slices.DeleteFunc(infos.Conf.WhiteIDs, func(num int64) bool {
 					return num == whiteID
 				})
-				infos.HasNew = true
+				if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+					log.Printf("保存配置文件失败: %+v", err)
+				}
 				infos.Mutex.Unlock()
 				sendMS(m, fmt.Sprintf("移除白名单成功: %d", whiteID), nil, 60)
 				return nil
@@ -199,7 +193,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.DC = value
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("DC已设置为: %d, 重启后生效", value), nil, 60)
 		return nil
@@ -220,7 +216,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.Site = content
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("反代地址已设置为: %s", content), nil, 60)
 		return nil
@@ -242,7 +240,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.MaxSize = value
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		src := fmt.Sprintf("最大缓存已设置为: %s", formatFileSize(value))
 		if value > 128*1024*1024 {
@@ -263,7 +263,13 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.Password = content
-		infos.HasNew = true
+		for key, value := range infos.IDs {
+			value.Hash = ""
+			infos.IDs[key] = value
+		}
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("密码已设置为: %s", content), nil, 60)
 		return nil
@@ -288,7 +294,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.ChannelID = value
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("频道ID已设置为: %d", value), nil, 60)
 		return nil
@@ -314,7 +322,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.Workers = num
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		src := fmt.Sprintf("并发数已设置为: %d", num)
 		if num > 4 {
@@ -368,7 +378,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.Channels = append(infos.Conf.Channels, channel)
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("添加频道成功: %s", channel), nil, 60)
 		return nil
@@ -391,7 +403,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		infos.Conf.Channels = slices.DeleteFunc(infos.Conf.Channels, func(key string) bool {
 			return key == channel
 		})
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("移除频道成功: %s", channel), nil, 60)
 		return nil
@@ -462,7 +476,9 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		}
 		infos.Mutex.Lock()
 		infos.Conf.Port = value
-		infos.HasNew = true
+		if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+			log.Printf("保存配置文件失败: %+v", err)
+		}
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("端口已设置为: %d, 重启后生效", value), nil, 60)
 		return nil
@@ -541,7 +557,7 @@ func handleMess(m *telegram.NewMessage) error {
 		return sendLink(m, link)
 	}
 
-	if infos.Status != 3 {
+	if infos.Status.Load() != 3 {
 		return nil
 	}
 

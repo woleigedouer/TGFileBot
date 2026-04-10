@@ -11,24 +11,24 @@ import (
 // Conf 结构体定义了程序运行所需的各项配置参数
 // 通过 json 标签与 config.json 文件进行映射
 type Conf struct {
-	Site      string  `json:"site"`                // 反代域名，用于生成公开访问链接
-	AppHash   string  `json:"hash"`                // Telegram API Hash，从 my.telegram.org 获取
-	BotToken  string  `json:"botToken"`            // Telegram Bot Token，用于交互和管理
-	Password  string  `json:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
-	Channels  []string `json:"channels,omitempty"` // 频道列表，用于搜索
-	DC        int     `json:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID
-	Port      int     `json:"port"`                // 本地 HTTP 服务监听的端口
-	Workers   int     `json:"workers,omitempty"`   // 文件下载/串流时的并发协程数
-	AppID     int32   `json:"id"`                  // Telegram API ID，从 my.telegram.org 获取
-	MaxSize   int64   `json:"maxSize,omitempty"`   // 最大缓存
-	UserID    int64   `json:"userID"`              // 管理员的 Telegram 用户 ID
-	ChannelID int64   `json:"channelID,omitempty"` // 默认关联的频道 ID
-	AdminIDs  []int64 `json:"adminIDs,omitempty"`  // 管理员 ID 列表，拥有管理权限
-	WhiteIDs  []int64 `json:"whiteIDs,omitempty"`  // 白名单 ID 列表，允许使用部分功能
+	Site      string   `json:"site"`                // 反代域名, 用于生成公开访问链接
+	AppHash   string   `json:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
+	BotToken  string   `json:"botToken"`            // Telegram Bot Token, 用于交互和管理
+	Password  string   `json:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
+	Channels  []string `json:"channels,omitempty"`  // 频道列表, 用于搜索
+	DC        int      `json:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID
+	Port      int      `json:"port"`                // 本地 HTTP 服务监听的端口
+	Workers   int      `json:"workers,omitempty"`   // 文件下载/串流时的并发协程数
+	AppID     int32    `json:"id"`                  // Telegram API ID, 从 my.telegram.org 获取
+	MaxSize   int64    `json:"maxSize,omitempty"`   // 最大缓存
+	UserID    int64    `json:"userID"`              // 管理员的 Telegram 用户 ID
+	ChannelID int64    `json:"channelID,omitempty"` // 默认关联的频道 ID
+	AdminIDs  []int64  `json:"adminIDs,omitempty"`  // 管理员 ID 列表, 拥有管理权限
+	WhiteIDs  []int64  `json:"whiteIDs,omitempty"`  // 白名单 ID 列表, 允许使用部分功能
 }
 
 // loadConf 从指定路径加载 config.json 配置文件
-// 如果文件不存在或解析失败，将返回错误
+// 如果文件不存在或解析失败, 将返回错误
 func loadConf(filesPath string) (*Conf, error) {
 	// 拼接完整的配置文件路径
 	confPath := filepath.Join(filesPath, "config.json")

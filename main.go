@@ -31,7 +31,7 @@ type HackLink struct {
 
 // CleanRealm 结构体用于定义清理缓存和会话的范围
 type CleanRealm struct {
-	Filter bool   // 是否启用过滤，只删除特定 ID 以外的文件
+	Filter bool   // 是否启用过滤, 只删除特定 ID 以外的文件
 	ID     string // 过滤 ID（如账号 ID）
 	Cate   string // 类型：bot 或 user
 	Realm  string // 范围：cache 或 session
@@ -43,7 +43,7 @@ type OffSet struct {
 }
 
 type OffSets struct {
-	Mutex   *sync.Mutex       // 互斥锁，保护并发安全
+	Mutex   *sync.Mutex       // 互斥锁, 保护并发安全
 	OffSets map[string]OffSet // 偏移量映射
 }
 
@@ -72,26 +72,29 @@ type Items struct {
 	Item    []Item `json:"item"`
 }
 
+type ID struct {
+	Hash    string
+	IsAdmin bool
+	IsWhite bool
+}
+
 // Infos 结构体保存了程序运行时的全局状态和资源句柄
 type Infos struct {
 	BotClient  *telegram.Client      // 独立的 Bot 客户端（用于与用户交互）
 	UserClient *telegram.Client      // 全局 UserBot 客户端实例（用于读取私有内容和流式传输）
 	Client     *telegram.Client      // 当前活跃客户端指针
-	Mutex      *sync.Mutex           // 全局互斥锁，保护并发安全
+	Mutex      *sync.Mutex           // 全局互斥锁, 保护并发安全
 	Conf       *Conf                 // 指向全局配置
 	File       *os.File              // 日志文件句柄
-	HasNew     bool                  // 标记配置是否被动态修改需要持久化
+	Rex        *regexp.Regexp        // 用于解析 Telegram FloodWait 错误的正则
 	FilesPath  string                // 配置文件存放目录
 	FilePath   string                // 日志文件路径
-	Status     int                   // UserBot 登录状态: 0 未登录, 1 等待验证码, 2 等待二步验证, 3 已登录
 	BotID      int64                 // Bot 自身的 ID
+	Status     atomic.Int32          // UserBot 登录状态: 0 未登录, 1 等待验证码, 2 等待二步验证, 3 已登录
 	WaitUntil  atomic.Int64          // 等待结束时间
-	Code       chan string            // 用于接收异步提交的验证码
-	Pass       chan string            // 用于接收异步提交的二步验证密码
-	IDs        map[int64]string      // 缓存用户 ID 到哈希的映射，减少重复计算
-	WhiteMap   map[int64]struct{}    // 白名单查询缓存 O(1)
-	AdminMap   map[int64]struct{}    // 管理员查询缓存 O(1)
-	Rex        *regexp.Regexp        // 用于解析 Telegram FloodWait 错误的正则
+	Code       chan string           // 用于接收异步提交的验证码
+	Pass       chan string           // 用于接收异步提交的二步验证密码
+	IDs        map[int64]ID          // 缓存用户 ID 到哈希的映射, 减少重复计算
 	HeadCache  map[string]MediaCache // 缓存文件头部数据
 	TailCache  map[string]MediaCache // 缓存文件尾部数据
 }
@@ -99,7 +102,7 @@ type Infos struct {
 var infos *Infos
 var offSets *OffSets
 var startTime time.Time
-var version = "v1.0.7"
+var version = "v1.0.8"
 
 // main 是程序的入口函数
 func main() {
@@ -161,16 +164,16 @@ func main() {
 		return
 	}
 
-	// 5. 初始化 UserBot 客户端（此时只是连接，尚未完成登录流程）
+	// 5. 初始化 UserBot 客户端（此时只是连接, 尚未完成登录流程）
 	if err = infos.userBotClient(); err != nil {
 		log.Printf("UserBot 启动失败: %+v", err)
 		return
 	}
 
-	// 忽略 SIGPIPE 信号，防止由于网络异常断开导致进程崩溃
+	// 忽略 SIGPIPE 信号, 防止由于网络异常断开导致进程崩溃
 	signal.Ignore(syscall.SIGPIPE)
 
-	// 设置系统中断信号监听，用于优雅退出
+	// 设置系统中断信号监听, 用于优雅退出
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -182,7 +185,7 @@ func main() {
 			Handler:           http.HandlerFunc(handleMain),
 			ReadTimeout:       30 * time.Second,
 			ReadHeaderTimeout: 10 * time.Second,
-			// WriteTimeout:   60 * time.Second, // 禁用写入超时，允许长时间流式传输
+			// WriteTimeout:   60 * time.Second, // 禁用写入超时, 允许长时间流式传输
 			IdleTimeout:    600 * time.Second,
 			MaxHeaderBytes: 1 << 20, // 最大头部字节数 (1MB)
 		}
@@ -196,7 +199,7 @@ func main() {
 	// 7. 发送程序启动通知
 	sendMS(nil, "程序已启动", nil, 60)
 
-	// 8. 检查 UserBot 登录状态，尝试自动登录（若已存在 session）
+	// 8. 检查 UserBot 登录状态, 尝试自动登录（若已存在 session）
 	if err := infos.checkStatus(); err != nil {
 		log.Printf("UserBot 登录失败: %+v", err)
 		infos.resetStatus()
@@ -208,7 +211,7 @@ func main() {
 	sendMS(nil, "程序已退出", nil, 60)
 }
 
-// newInfos 初始化全局 Infos 对象，加载日志和配置
+// newInfos 初始化全局 Infos 对象, 加载日志和配置
 func newInfos(filePath, filesPath string) (*Infos, error) {
 	infos := &Infos{
 		FilePath:  filePath,
@@ -220,6 +223,9 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		TailCache: make(map[string]MediaCache, 4),
 		Rex:       regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),
 	}
+	// 启动配置自动保存监听
+	//go infos.watchConf()
+
 	// 创建日志文件
 	if filePath != "" {
 		filePath = filepath.Clean(filePath)
@@ -245,8 +251,8 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		conf.MaxSize = 32 * 1024 * 1024
 	}
 	infos.Conf = conf
-	infos.IDs = make(map[int64]string, len(conf.AdminIDs)+len(conf.WhiteIDs)+1)
-	infos.buildSets()
+	infos.IDs = make(map[int64]ID, len(conf.AdminIDs)+len(conf.WhiteIDs)+1)
+	infos.buildIDs()
 
 	// 获取 BotID
 	if conf.BotToken != "" {
