@@ -324,6 +324,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, channel := range channels {
+
 		infos.Cond.L.Lock()
 		for count.Load() >= maxCount {
 			infos.Cond.Wait()
@@ -333,14 +334,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		count.Add(1)
 		channel = strings.TrimPrefix(channel, "@")
 		go func(channel string) {
-			defer count.Add(-1)
-
-			if waitUntil := infos.WaitUntil.Load(); waitUntil > 0 {
-				if remaining := time.Until(time.Unix(waitUntil, 0)); remaining > 0 {
-					log.Printf("搜索: 检测到FloodWait, 等待 %.2f 秒", remaining.Seconds())
-					time.Sleep(remaining)
-				}
-			}
+			defer func() {
+				count.Add(-1)
+				infos.Cond.L.Lock()
+				infos.Cond.Broadcast()
+				infos.Cond.L.Unlock()
+			}()
 			
 			result, err := infos.search(channel, keywords, page, limit, int32(offset))
 			if err != nil {

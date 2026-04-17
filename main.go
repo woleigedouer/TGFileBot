@@ -225,10 +225,12 @@ func main() {
 
 // newInfos 初始化全局 Infos 对象, 加载日志和配置
 func newInfos(filePath, filesPath string) (*Infos, error) {
+	mutex := new(sync.RWMutex)
 	infos := &Infos{
 		FilePath:  filePath,
 		FilesPath: filesPath,
-		Mutex:     new(sync.RWMutex),
+		Mutex:     mutex,
+		Cond:      sync.NewCond(mutex),
 		Code:      make(chan string, 1),
 		Pass:      make(chan string, 1),
 		HeadCache: make(map[string]MediaCache, 4),

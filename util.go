@@ -171,6 +171,13 @@ func isDigit(r rune) bool {
 
 // search 在指定频道中搜索关键词并返回匹配的媒体文件列表
 func (infos *Infos) search(channel, keywords string, page, limit int, offset int32) (items Items, err error) {
+	if waitUntil := infos.WaitUntil.Load(); waitUntil > 0 {
+		if remaining := time.Until(time.Unix(waitUntil, 0)); remaining > 0 {
+			log.Printf("搜索: 检测到FloodWait, 等待 %.2f 秒", remaining.Seconds())
+			time.Sleep(remaining)
+		}
+	}
+
 	ch, err := infos.UserClient.ResolvePeer(fmt.Sprintf("@%s", channel))
 	if err != nil {
 		log.Printf("频道解析失败: %+v", err)
