@@ -21,6 +21,16 @@ func handleBotCommand(m *telegram.NewMessage) error {
 
 	text := strings.TrimSpace(m.Text())
 
+	// 以 / 开头的命令消息，1分钟后自动删除
+	if strings.HasPrefix(text, "/") {
+		go func() {
+			time.Sleep(60 * time.Second)
+			if _, err := m.Delete(); err != nil {
+				log.Printf("删除命令消息失败: %+v", err)
+			}
+		}()
+	}
+
 	switch {
 	case strings.HasPrefix(text, "/start"):
 		if !infos.isWhite(m.SenderID()) {
