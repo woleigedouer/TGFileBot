@@ -20,7 +20,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 	}
 
 	text := strings.TrimSpace(m.Text())
-	
+
 	// 拦截非管理指令并匹配正则过滤规则 [FEAT-002]
 	if !m.IsMedia() && text != "" && !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "http") {
 		infos.Mutex.RLock()
@@ -376,7 +376,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, values.String(), nil, 60)
 		}
 		return nil
-	case strings.HasPrefix(text, "/add") && !strings.HasPrefix(text, "/addRule"):
+	case strings.HasPrefix(text, "/add") && !strings.HasPrefix(text, "/addrule"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
@@ -399,7 +399,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("添加频道成功: %s", channel), nil, 60)
 		return nil
-	case strings.HasPrefix(text, "/del") && !strings.HasPrefix(text, "/delRule") :
+	case strings.HasPrefix(text, "/del") && !strings.HasPrefix(text, "/delrule"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
@@ -561,12 +561,12 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, values.String(), nil)
 		}
 		return nil
-	case strings.HasPrefix(text, "/addRule"):
+	case strings.HasPrefix(text, "/addrule"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
 		}
-		rule := strings.TrimSpace(strings.TrimPrefix(text, "/addRule"))
+		rule := strings.TrimSpace(strings.TrimPrefix(text, "/addrule"))
 		if rule == "" {
 			sendMS(m, "请提供要添加的正则表达式", nil, 60)
 			return nil
@@ -590,12 +590,12 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		infos.buildRexRules()
 		sendMS(m, "添加正则规则成功", nil, 60)
 		return nil
-	case strings.HasPrefix(text, "/delRule"):
+	case strings.HasPrefix(text, "/delrule"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
 		}
-		content := strings.TrimSpace(strings.TrimPrefix(text, "/delRule"))
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/delrule"))
 		if content == "" {
 			sendMS(m, "请提供要移除的规则索引或内容", nil, 60)
 			return nil
