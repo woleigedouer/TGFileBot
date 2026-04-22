@@ -376,7 +376,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, values.String(), nil, 60)
 		}
 		return nil
-	case strings.HasPrefix(text, "/add"):
+	case strings.HasPrefix(text, "/add") && text != "/addRule":
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
@@ -386,6 +386,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, "请提供要添加的频道别名", nil, 60)
 			return nil
 		}
+		channel = strings.TrimPrefix(channel, "@")
 		if slices.Contains(infos.Conf.Channels, channel) {
 			sendMS(m, fmt.Sprintf("频道 %s 已存在", channel), nil, 60)
 			return nil
@@ -398,7 +399,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("添加频道成功: %s", channel), nil, 60)
 		return nil
-	case strings.HasPrefix(text, "/del"):
+	case strings.HasPrefix(text, "/del") && text != "/delRule":
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
@@ -408,6 +409,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, "请提供要移除的频道别名", nil, 60)
 			return nil
 		}
+		channel = strings.TrimPrefix(channel, "@")
 		if !slices.Contains(infos.Conf.Channels, channel) {
 			sendMS(m, fmt.Sprintf("频道 %s 不在搜索列表中", channel), nil, 60)
 			return nil
