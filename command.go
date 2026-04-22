@@ -376,7 +376,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			sendMS(m, values.String(), nil, 60)
 		}
 		return nil
-	case strings.HasPrefix(text, "/add") && text != "/addRule":
+	case strings.HasPrefix(text, "/add") && !strings.HasPrefix(text, "/addRule"):
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
@@ -399,7 +399,7 @@ func handleBotCommand(m *telegram.NewMessage) error {
 		infos.Mutex.Unlock()
 		sendMS(m, fmt.Sprintf("添加频道成功: %s", channel), nil, 60)
 		return nil
-	case strings.HasPrefix(text, "/del") && text != "/delRule":
+	case strings.HasPrefix(text, "/del") && !strings.HasPrefix(text, "/delRule") :
 		if !infos.isAdmin(m.SenderID()) {
 			sendMS(m, "你没有使用此命令的权限", nil, 60)
 			return nil
