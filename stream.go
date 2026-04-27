@@ -190,8 +190,11 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 			stream.Mutex.Unlock()
 
 			// 调用 Gogram 接口从 Telegram 下载特定范围的文件块
-			// 将超时时间从 90s 缩短至 10s 以解决冷启动 TCP 连接假死的问题 [BUG-001]
-			timeout := time.Duration(5*num) * time.Second
+			// 首次请求给足冷启动时间, 后续固定超时
+			timeout := 10 * time.Second
+			if num == 1 {
+				timeout = 15 * time.Second
+			}
 
 			content, fileName, err := stream.Client.DownloadChunk(src, int(task.ContentStart), int(task.ContentEnd), int(stream.ChunkSize), false, stream.Ctx, timeout)
 			if err != nil {
