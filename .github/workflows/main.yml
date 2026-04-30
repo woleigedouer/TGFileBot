@@ -2,66 +2,47 @@ name: build TGFileBot
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    tags: ['v*', '*.*.*']
   pull_request:
-    branches: [ main ]
-  repository_dispatch:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: woleigedouer/tgfilebot
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        platform: [ubuntu-latest]
-        go-version: [ '1.26.1' ]
-    name: Build
-    runs-on: ${{ matrix.platform }}
+  test:
+    name: Test
+    runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
+          cache: true
 
+      - name: Test
+        run: go test ./...
+
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
-        
-      - name: Bump Version and Push Tag
-        id: bump
-        uses: anothrNick/github-tag-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WITH_V: false  # 不生成带v前缀的标签，如1.0.0而非v1.0.0
-          
-      - name: Update Dependencies
-        env:
-          GOPRIVATE: github.com/lm317379829/gogram
-        run: |
-          go mod edit -dropreplace github.com/amarnathcjd/gogram
-          go mod edit -replace github.com/amarnathcjd/gogram=github.com/lm317379829/gogram@latest
-          go mod tidy
 
-      - name: Build Go
-        run: |
-          set +e
-          GOOS=linux GOARCH=386 CGO_ENABLED=0 go build -ldflags "-s -w" -tags netgo -installsuffix netgo -o TGFileBot-linux-386
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -tags netgo -installsuffix netgo -o TGFileBot-linux-amd64
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -tags netgo -installsuffix netgo -o TGFileBot-linux-arm64
-          GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -tags netgo -installsuffix netgo -o TGFileBot-freebsd-amd64
-          echo "DIR_NAME=$PWD" >> $GITHUB_ENV
-          echo ${{ steps.bump.outputs.new_tag }} >> TGFileBot-version
-
-      - name: Upload Go to Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.bump.outputs.new_tag }}
-          files: ${{ env.DIR_NAME }}/TGFileBot-*
-      
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -70,21 +51,22 @@ jobs:
 
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      - name: Extract Metadata
+      - name: Docker Metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
-          images: lm317379829/tgfilebot
+          images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.bump.outputs.new_tag }}
-            type=raw,value=latest
-     
-      # 构建并推送Docker镜像
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
       - name: Build and Push
         uses: docker/build-push-action@v6
         with:
@@ -95,17 +77,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Delete Workflow Runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          retain_days: 1
-          keep_minimum_runs: 3
-
-      - name: Remove Old Releases
-        uses: dev-drprasad/delete-older-releases@v0.1.0
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

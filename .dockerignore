@@ -1,0 +1,8 @@
+.git
+.github
+files
+*.log
+*.session
+*.session-journal
+TGFileBot-linux-*
+TGBot

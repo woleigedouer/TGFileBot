@@ -1,0 +1,9 @@
+services:
+  tgfilebot:
+    image: woleigedouer/tgfilebot:latest
+    container_name: tgfilebot
+    restart: unless-stopped
+    ports:
+      - "9981:8080"
+    volumes:
+      - ./files:/root/files
