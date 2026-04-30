@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
+	"github.com/fsnotify/fsnotify"
 )
 
 // HackLink 结构体用于在处理提取链接时传递中间数据
@@ -162,8 +163,8 @@ func main() {
 	}()
 
 	// 3. 校验关键配置参数
-	if infos.Conf.AppID == 0 || infos.Conf.AppHash == "" || infos.Conf.BotToken == "" {
-		log.Panicf("配置文件缺少必要的参数: AppID、AppHash、BotToken")
+	if err = infos.waitRequiredConf(); err != nil {
+		log.Printf("等待配置失败: %+v", err)
 		return
 	}
 
@@ -233,6 +234,122 @@ func main() {
 	sendMS(nil, "程序已退出", nil, 60)
 }
 
+// waitRequiredConf 在启动阶段等待必要配置填写完整，避免容器反复重启。
+func (infos *Infos) waitRequiredConf() error {
+	configPath := filepath.Join(infos.FilesPath, "config.json")
+	if isRequiredConfReady(infos.Conf) {
+		return nil
+	}
+
+	log.Printf("配置文件缺少必要的参数: AppID、AppHash、BotToken")
+	log.Printf("请编辑配置文件: %s", configPath)
+	log.Printf("程序会监听配置文件变化, 填写完成后自动继续启动")
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add(infos.FilesPath); err != nil {
+		return err
+	}
+
+	statusChan := make(chan os.Signal, 1)
+	signal.Notify(statusChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(statusChan)
+
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	reload := func() (bool, error) {
+		conf, err := loadConf(infos.FilesPath)
+		if err != nil {
+			return false, err
+		}
+		if !isRequiredConfReady(conf) {
+			return false, nil
+		}
+
+		infos.Conf = conf
+		infos.buildIDs()
+		infos.buildRexRules()
+		infos.updateBotIDFromConf()
+		log.Printf("配置已补全, 继续启动")
+		return true, nil
+	}
+
+	for {
+		select {
+		case status := <-statusChan:
+			return fmt.Errorf("收到信号: %v", status)
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return fmt.Errorf("配置文件监听已关闭")
+			}
+			if !isConfigFileEvent(event, configPath) {
+				continue
+			}
+			time.Sleep(200 * time.Millisecond)
+			ready, err := reload()
+			if err != nil {
+				log.Printf("重新读取配置失败: %+v", err)
+				continue
+			}
+			if ready {
+				return nil
+			}
+			log.Printf("配置仍缺少必要参数, 继续等待: %s", configPath)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return fmt.Errorf("配置文件监听已关闭")
+			}
+			log.Printf("监听配置文件失败: %+v", err)
+		case <-ticker.C:
+			ready, err := reload()
+			if err != nil {
+				log.Printf("重新读取配置失败: %+v", err)
+				continue
+			}
+			if !ready {
+				log.Printf("配置仍缺少必要参数, 继续等待: %s", configPath)
+				continue
+			}
+			return nil
+		}
+	}
+}
+
+func isConfigFileEvent(event fsnotify.Event, configPath string) bool {
+	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove|fsnotify.Chmod) == 0 {
+		return false
+	}
+	return filepath.Clean(event.Name) == filepath.Clean(configPath)
+}
+
+func isRequiredConfReady(conf *Conf) bool {
+	return conf != nil && conf.AppID != 0 && conf.AppHash != "" && conf.BotToken != ""
+}
+
+func (infos *Infos) updateBotIDFromConf() {
+	infos.BotID = 0
+	if infos.Conf == nil || infos.Conf.BotToken == "" {
+		return
+	}
+	parts := strings.Split(infos.Conf.BotToken, ":")
+	if len(parts) < 1 {
+		log.Printf("BotToken 格式错误: %s", infos.Conf.BotToken)
+		return
+	}
+	result := strings.TrimSpace(parts[0])
+	botID, err := strconv.ParseInt(result, 10, 64)
+	if err != nil {
+		log.Printf("解析 BotID 失败: %+v", err)
+		return
+	}
+	infos.BotID = botID
+}
+
 // newInfos 初始化全局 Infos 对象, 加载日志和配置
 func newInfos(filePath, filesPath string) (*Infos, error) {
 	mutex := new(sync.RWMutex)
@@ -280,17 +397,7 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 	infos.buildRexRules()
 
 	// 获取 BotID
-	if conf.BotToken != "" {
-		parts := strings.Split(conf.BotToken, ":")
-		if len(parts) < 1 {
-			return nil, fmt.Errorf("BotToken 格式错误: %s", conf.BotToken)
-		}
-		result := strings.TrimSpace(parts[0])
-		infos.BotID, err = strconv.ParseInt(result, 10, 64)
-		if err != nil {
-			log.Printf("解析 BotID 失败: %+v", err)
-		}
-	}
+	infos.updateBotIDFromConf()
 
 	return infos, nil
 }
