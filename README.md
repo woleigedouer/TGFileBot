@@ -91,7 +91,7 @@ docker build -t tgfilebot .
 docker run -d --name tgfilebot -p 8080:8080 -v $(pwd)/files:/root/files tgfilebot
 ```
 
-容器默认使用 `/root/files/config.json`。首次启动时如果挂载目录中没有 `config.json`，会自动生成模板到宿主机的 `./files/config.json`。填写 `id`、`hash`、`botToken` 等必要配置并保存后，程序会监听到变化并自动继续启动。
+容器默认使用 `/root/files/config.json`。首次启动时如果挂载目录中没有 `config.json`，会自动生成模板到宿主机的 `./files/config.json`。填写 `id`、`hash`、`botToken`、`userID` 等必要配置并保存后，程序会监听到变化并自动继续启动。
 
 ## 使用方法
 

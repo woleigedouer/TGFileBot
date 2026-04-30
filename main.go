@@ -241,7 +241,7 @@ func (infos *Infos) waitRequiredConf() error {
 		return nil
 	}
 
-	log.Printf("配置文件缺少必要的参数: AppID、AppHash、BotToken")
+	log.Printf("配置文件缺少必要的参数: AppID、AppHash、BotToken、UserID")
 	log.Printf("请编辑配置文件: %s", configPath)
 	log.Printf("程序会监听配置文件变化, 填写完成后自动继续启动")
 
@@ -261,6 +261,7 @@ func (infos *Infos) waitRequiredConf() error {
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	var lastWaitLog time.Time
 
 	reload := func() (bool, error) {
 		conf, err := loadConf(infos.FilesPath)
@@ -299,7 +300,7 @@ func (infos *Infos) waitRequiredConf() error {
 			if ready {
 				return nil
 			}
-			log.Printf("配置仍缺少必要参数, 继续等待: %s", configPath)
+			logWaitRequiredConf(&lastWaitLog, configPath)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return fmt.Errorf("配置文件监听已关闭")
@@ -312,7 +313,7 @@ func (infos *Infos) waitRequiredConf() error {
 				continue
 			}
 			if !ready {
-				log.Printf("配置仍缺少必要参数, 继续等待: %s", configPath)
+				logWaitRequiredConf(&lastWaitLog, configPath)
 				continue
 			}
 			return nil
@@ -327,8 +328,16 @@ func isConfigFileEvent(event fsnotify.Event, configPath string) bool {
 	return filepath.Clean(event.Name) == filepath.Clean(configPath)
 }
 
+func logWaitRequiredConf(lastLog *time.Time, configPath string) {
+	if time.Since(*lastLog) < 3*time.Second {
+		return
+	}
+	*lastLog = time.Now()
+	log.Printf("配置仍缺少必要参数, 继续等待: %s", configPath)
+}
+
 func isRequiredConfReady(conf *Conf) bool {
-	return conf != nil && conf.AppID != 0 && conf.AppHash != "" && conf.BotToken != ""
+	return conf != nil && conf.AppID != 0 && conf.AppHash != "" && conf.BotToken != "" && conf.UserID != 0
 }
 
 func (infos *Infos) updateBotIDFromConf() {
