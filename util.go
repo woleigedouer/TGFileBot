@@ -246,6 +246,21 @@ func packMessagesResult(client *telegram.Client, result telegram.MessagesMessage
 	return messages
 }
 
+func packDiscussionMessages(client *telegram.Client, result *telegram.MessagesDiscussionMessage) []telegram.NewMessage {
+	if result == nil {
+		return nil
+	}
+	client.Cache.UpdatePeersToCache(result.Users, result.Chats)
+	packed := telegram.PackMessages(client, result.Messages)
+	messages := make([]telegram.NewMessage, 0, len(packed))
+	for _, message := range packed {
+		if message != nil {
+			messages = append(messages, *message)
+		}
+	}
+	return messages
+}
+
 func inputMessageIDs(ids []int32) []telegram.InputMessage {
 	inputIDs := make([]telegram.InputMessage, 0, len(ids))
 	for _, id := range ids {
@@ -303,6 +318,38 @@ func (infos *Infos) searchMessagesFast(peer telegram.InputPeer, action, keywords
 	return packMessagesResult(infos.UserClient, result), nil
 }
 
+func (infos *Infos) getDiscussionMessagesFast(peer telegram.InputPeer, msgID int32) ([]telegram.NewMessage, error) {
+	if err := floodWaitError("读取讨论区"); err != nil {
+		return nil, err
+	}
+	result, err := infos.UserClient.MessagesGetDiscussionMessage(peer, msgID)
+	if err != nil {
+		recordFloodWaitFromError(err)
+		return nil, err
+	}
+	return packDiscussionMessages(infos.UserClient, result), nil
+}
+
+func (infos *Infos) getRepliesFast(peer telegram.InputPeer, msgID int32, limit int, offset int32) ([]telegram.NewMessage, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if err := floodWaitError("读取评论区"); err != nil {
+		return nil, err
+	}
+	result, err := infos.UserClient.MessagesGetReplies(&telegram.MessagesGetRepliesParams{
+		Peer:     peer,
+		MsgID:    msgID,
+		OffsetID: offset,
+		Limit:    int32(limit),
+	})
+	if err != nil {
+		recordFloodWaitFromError(err)
+		return nil, err
+	}
+	return packMessagesResult(infos.UserClient, result), nil
+}
+
 func messageGroupedID(m telegram.NewMessage) int64 {
 	if m.Message == nil {
 		return 0
@@ -322,6 +369,10 @@ func mediaItemFromMessage(m telegram.NewMessage) (Item, bool) {
 }
 
 func mediaItemFromMessageText(m telegram.NewMessage, text string) (Item, bool) {
+	return mediaItemFromMessageTextWithReply(m, text, 0)
+}
+
+func mediaItemFromMessageTextWithReply(m telegram.NewMessage, text string, replyMID int32) (Item, bool) {
 	if m.File == nil || m.Channel == nil || !isVideoMessage(m) {
 		return Item{}, false
 	}
@@ -334,17 +385,19 @@ func mediaItemFromMessageText(m telegram.NewMessage, text string) (Item, bool) {
 		name = fmt.Sprintf("Telegram %d", m.ID)
 	}
 	return Item{
-		Name: name,
-		Text: text,
-		Size: m.File.Size,
-		CID:  m.Channel.ID,
-		MID:  m.ID,
-		Date: messageDate(m),
+		Name:     name,
+		Text:     text,
+		Size:     m.File.Size,
+		CID:      m.Channel.ID,
+		MID:      m.ID,
+		ReplyMID: replyMID,
+		Date:     messageDate(m),
 	}, true
 }
 
 type groupedMediaContext struct {
 	Text   string
+	TextID int32
 	Videos []telegram.NewMessage
 }
 
@@ -357,15 +410,14 @@ func (ctx groupedMediaContext) textFor(m telegram.NewMessage) string {
 
 func collectGroupedMediaContext(messages []telegram.NewMessage, groupID int64) groupedMediaContext {
 	var ctx groupedMediaContext
-	var textID int32
 	seenVideos := make(map[string]bool)
 	for _, m := range messages {
 		if groupID != 0 && messageGroupedID(m) != groupID {
 			continue
 		}
-		if text := strings.TrimSpace(m.Text()); text != "" && (ctx.Text == "" || m.ID < textID) {
+		if text := strings.TrimSpace(m.Text()); text != "" && (ctx.Text == "" || m.ID < ctx.TextID) {
 			ctx.Text = text
-			textID = m.ID
+			ctx.TextID = m.ID
 		}
 		if isVideoMessage(m) {
 			key := fmt.Sprintf("%d:%d", messageChannelID(m), m.ID)
@@ -408,11 +460,89 @@ func appendGroupedVideoItems(items *Items, channel string, groupCache map[int64]
 		if seen[key] {
 			continue
 		}
-		if item, ok := mediaItemFromMessageText(video, ctx.textFor(video)); ok {
+		replyMID := replyMIDForVideo(ctx, video)
+		if item, ok := mediaItemFromMessageTextWithReply(video, ctx.textFor(video), replyMID); ok {
 			seen[key] = true
 			items.Item = append(items.Item, item)
 		}
 	}
+}
+
+func replyMIDForVideo(ctx groupedMediaContext, video telegram.NewMessage) int32 {
+	if strings.TrimSpace(ctx.Text) == "" || ctx.TextID == 0 || ctx.TextID == video.ID {
+		return 0
+	}
+	return ctx.TextID
+}
+
+func replyLookupLimit(limit int) int {
+	switch {
+	case limit < 20:
+		return 20
+	case limit > 50:
+		return 50
+	default:
+		return limit
+	}
+}
+
+func (infos *Infos) replyItems(peer telegram.InputPeer, parent telegram.NewMessage, parentText string, limit int) (items Items, err error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	seen := make(map[string]bool)
+	appendReplies := func(replies []telegram.NewMessage) bool {
+		for _, reply := range replies {
+			if !isVideoMessage(reply) || reply.Channel == nil {
+				continue
+			}
+			key := fmt.Sprintf("%d:%d", reply.Channel.ID, reply.ID)
+			if seen[key] {
+				continue
+			}
+			text := strings.TrimSpace(parentText)
+			if text == "" {
+				text = reply.Text()
+			}
+			item, ok := mediaItemFromMessageText(reply, text)
+			if !ok {
+				continue
+			}
+			seen[key] = true
+			items.Item = append(items.Item, item)
+		}
+		return len(items.Item) > 0
+	}
+
+	directReplies, err := infos.getRepliesFast(peer, parent.ID, replyLookupLimit(limit), 0)
+	if err == nil && appendReplies(directReplies) {
+		items.Channel = messageChannelTitle(parent, "")
+		return items, nil
+	}
+	if err != nil {
+		log.Printf("直接读取评论区失败: cid=%d, mid=%d, err=%v", messageChannelID(parent), parent.ID, err)
+	}
+
+	discussion, discussionErr := infos.getDiscussionMessagesFast(peer, parent.ID)
+	if discussionErr != nil {
+		if err != nil {
+			return items, err
+		}
+		return items, discussionErr
+	}
+	for _, top := range discussion {
+		if top.Peer == nil {
+			continue
+		}
+		replies, replyErr := infos.getRepliesFast(top.Peer, top.ID, replyLookupLimit(limit), 0)
+		if replyErr != nil {
+			log.Printf("读取讨论区回复失败: cid=%d, mid=%d, err=%v", messageChannelID(top), top.ID, replyErr)
+			continue
+		}
+		appendReplies(replies)
+	}
+	items.Channel = messageChannelTitle(parent, "")
+	return items, nil
 }
 
 func (infos *Infos) loadGroupedMediaContexts(peer telegram.InputPeer, seeds []telegram.NewMessage) map[int64]groupedMediaContext {

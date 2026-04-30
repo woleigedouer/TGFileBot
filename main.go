@@ -49,12 +49,13 @@ type OffSets struct {
 }
 
 type Item struct {
-	Name string `json:"name"`
-	Text string `json:"text,omitempty"`
-	MID  int32  `json:"mid"`
-	CID  int64  `json:"cid"`
-	Size int64  `json:"size"`
-	Date int32  `json:"date,omitempty"`
+	Name     string `json:"name"`
+	Text     string `json:"text,omitempty"`
+	MID      int32  `json:"mid"`
+	CID      int64  `json:"cid"`
+	ReplyMID int32  `json:"reply_mid,omitempty"`
+	Size     int64  `json:"size"`
+	Date     int32  `json:"date,omitempty"`
 }
 
 type ChannelItem struct {

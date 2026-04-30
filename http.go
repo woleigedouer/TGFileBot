@@ -55,6 +55,10 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 		// 返回频道最新媒体列表
 		handleLatest(w, r)
 		return
+	case strings.HasPrefix(path, "/replies"):
+		// 按需读取指定频道帖子的评论区媒体
+		handleReplies(w, r)
+		return
 	case strings.HasPrefix(path, "/search"):
 		// 处理搜索
 		handleSearch(w, r)
@@ -63,6 +67,98 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 		// 404
 		http.NotFound(w, r)
 		return
+	}
+}
+
+func resolveRequestPeer(params map[string]string) (telegram.InputPeer, error) {
+	if channel := cleanChannelID(params["channel"]); channel != "" {
+		return infos.UserClient.ResolvePeer("@" + channel)
+	}
+	if value := strings.TrimSpace(params["cid"]); value != "" {
+		cid, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || cid == 0 {
+			return nil, fmt.Errorf("频道ID无效")
+		}
+		return infos.UserClient.ResolvePeer(cid)
+	}
+	return nil, fmt.Errorf("缺少频道参数")
+}
+
+func parsePositiveInt32(value string, name string) (int32, error) {
+	num, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	if err != nil || num <= 0 {
+		return 0, fmt.Errorf("%s无效", name)
+	}
+	return int32(num), nil
+}
+
+// handleReplies 按需读取频道帖子评论区内的视频资源, 供详情页调用。
+func handleReplies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, fmt.Sprintf("不支持的请求方法: %s", r.Method), http.StatusMethodNotAllowed)
+		return
+	}
+	if infos.UserClient == nil || infos.Status.Load() != 3 {
+		http.Error(w, "userBot 未登录, 无法读取评论区资源", http.StatusUnauthorized)
+		return
+	}
+	params := r.URL.Query()
+	if err := checkPass(params); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	mid, err := parsePositiveInt32(params.Get("mid"), "消息ID")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	limit, err := strconv.Atoi(params.Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	peer, err := resolveRequestPeer(map[string]string{
+		"channel": params.Get("channel"),
+		"cid":     params.Get("cid"),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	parents, err := infos.getMessagesByIDsFast(peer, []int32{mid})
+	if err != nil || len(parents) == 0 {
+		log.Printf("获取评论主帖失败: mid=%d, err=%v, count=%d", mid, err, len(parents))
+		http.Error(w, fmt.Sprintf("获取评论主帖失败: mid=%d", mid), http.StatusNotFound)
+		return
+	}
+	parent := parents[0]
+	items, err := infos.replyItems(peer, parent, parent.Text(), limit)
+	if err != nil {
+		log.Printf("读取评论区资源失败: cid=%d, mid=%d, err=%v", messageChannelID(parent), parent.ID, err)
+		http.Error(w, fmt.Sprintf("读取评论区资源失败: %v", err), http.StatusBadGateway)
+		return
+	}
+	if items.Channel == "" {
+		items.Channel = messageChannelTitle(parent, cleanChannelID(params.Get("channel")))
+	}
+
+	content, err := json.Marshal(items)
+	if err != nil {
+		log.Printf("JSON序列化失败: %+v", err)
+		http.Error(w, "JSON序列化失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := w.Write(content); err != nil {
+		log.Printf("写入评论区响应失败: %+v", err)
 	}
 }
 
