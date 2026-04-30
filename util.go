@@ -486,6 +486,14 @@ func replyLookupLimit(limit int) int {
 	}
 }
 
+func isUnavailableReplyThreadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "PEER_ID_INVALID") || strings.Contains(message, "MSG_ID_INVALID")
+}
+
 func (infos *Infos) replyItems(peer telegram.InputPeer, parent telegram.NewMessage, parentText string, limit int) (items Items, err error) {
 	if limit <= 0 {
 		limit = 20
@@ -519,14 +527,20 @@ func (infos *Infos) replyItems(peer telegram.InputPeer, parent telegram.NewMessa
 		items.Channel = messageChannelTitle(parent, "")
 		return items, nil
 	}
-	if err != nil {
+	if err != nil && !isUnavailableReplyThreadError(err) {
 		log.Printf("直接读取评论区失败: cid=%d, mid=%d, err=%v", messageChannelID(parent), parent.ID, err)
 	}
 
 	discussion, discussionErr := infos.getDiscussionMessagesFast(peer, parent.ID)
 	if discussionErr != nil {
+		if isUnavailableReplyThreadError(discussionErr) && (err == nil || isUnavailableReplyThreadError(err)) {
+			items.Channel = messageChannelTitle(parent, "")
+			return items, nil
+		}
 		if err != nil {
-			return items, err
+			if !isUnavailableReplyThreadError(err) {
+				return items, err
+			}
 		}
 		return items, discussionErr
 	}
@@ -536,7 +550,9 @@ func (infos *Infos) replyItems(peer telegram.InputPeer, parent telegram.NewMessa
 		}
 		replies, replyErr := infos.getRepliesFast(top.Peer, top.ID, replyLookupLimit(limit), 0)
 		if replyErr != nil {
-			log.Printf("读取讨论区回复失败: cid=%d, mid=%d, err=%v", messageChannelID(top), top.ID, replyErr)
+			if !isUnavailableReplyThreadError(replyErr) {
+				log.Printf("读取讨论区回复失败: cid=%d, mid=%d, err=%v", messageChannelID(top), top.ID, replyErr)
+			}
 			continue
 		}
 		appendReplies(replies)
