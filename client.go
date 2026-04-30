@@ -515,11 +515,12 @@ func botConf(cate string) (conf telegram.ClientConfig) {
 					}
 				}
 			}
-			log.Printf("访问太过频繁, 等待 %d 秒后重试", wait+1)
+			log.Printf("访问太过频繁, %d 秒内暂停新的 Telegram 请求", wait+1)
 			waitUntil := time.Now().Add(time.Duration(wait+1) * time.Second)
-			infos.WaitUntil.Store(waitUntil.Unix())
-			time.Sleep(time.Duration(wait+1) * time.Second)
-			return true
+			if currentWait := infos.WaitUntil.Load(); waitUntil.Unix() > currentWait {
+				infos.WaitUntil.Store(waitUntil.Unix())
+			}
+			return false
 		},
 	}
 }

@@ -50,9 +50,17 @@ type OffSets struct {
 
 type Item struct {
 	Name string `json:"name"`
+	Text string `json:"text,omitempty"`
 	MID  int32  `json:"mid"`
 	CID  int64  `json:"cid"`
 	Size int64  `json:"size"`
+	Date int32  `json:"date,omitempty"`
+}
+
+type ChannelItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	CID  int64  `json:"cid,omitempty"`
 }
 
 type MediaContent struct {

@@ -47,6 +47,14 @@ func handleMain(w http.ResponseWriter, r *http.Request) {
 		// 处理文件分片流式下载（串流播放）核心接口
 		handleStream(w, r)
 		return
+	case strings.HasPrefix(path, "/channels"):
+		// 返回配置中的频道分类
+		handleChannels(w, r)
+		return
+	case strings.HasPrefix(path, "/latest"):
+		// 返回频道最新媒体列表
+		handleLatest(w, r)
+		return
 	case strings.HasPrefix(path, "/search"):
 		// 处理搜索
 		handleSearch(w, r)
@@ -283,6 +291,59 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleChannels 返回 config.json 中配置的频道, 供视频源分类页使用
+func handleChannels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, fmt.Sprintf("不支持的请求方法: %s", r.Method), http.StatusMethodNotAllowed)
+		return
+	}
+	params := r.URL.Query()
+	if err := checkPass(params); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	infos.Mutex.RLock()
+	channels := make([]string, len(infos.Conf.Channels))
+	copy(channels, infos.Conf.Channels)
+	infos.Mutex.RUnlock()
+
+	items := make([]ChannelItem, 0, len(channels))
+	for _, channel := range channels {
+		id := cleanChannelID(channel)
+		if id == "" {
+			continue
+		}
+		items = append(items, ChannelItem{ID: id, Name: id})
+	}
+
+	// 已登录 UserBot 时, 尝试用最近一条消息补全频道标题和 CID。
+	if infos.UserClient != nil && infos.Status.Load() == 3 {
+		for index := range items {
+			if ms, err := infos.UserClient.GetHistory("@"+items[index].ID, &telegram.HistoryOption{Limit: 1}); err == nil && len(ms) > 0 {
+				if ms[0].Channel != nil {
+					items[index].CID = ms[0].Channel.ID
+					if title := strings.TrimSpace(ms[0].Channel.Title); title != "" {
+						items[index].Name = title
+					}
+				}
+			}
+		}
+	}
+
+	content := struct {
+		Channels []ChannelItem `json:"channels"`
+	}{Channels: items}
+
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodHead {
+		return
+	}
+	if err := json.NewEncoder(w).Encode(content); err != nil {
+		log.Printf("发送频道列表失败: %+v", err)
+	}
+}
+
 // handleSearch 处理搜索请求, 并发搜索多个频道
 func handleSearch(w http.ResponseWriter, r *http.Request) {
 	if infos.UserClient == nil {
@@ -387,6 +448,149 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("写入长度 %d 的响应体失败: %+v", n, err)
 			return
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case result, ok := <-results:
+			if !ok {
+				return
+			}
+			if len(result.Item) > 0 {
+				items.Items = append(items.Items, result)
+			}
+			if !items.HasMore && result.HasMore {
+				items.HasMore = result.HasMore
+			}
+		}
+	}
+}
+
+// handleLatest 处理频道最新媒体列表请求, 用于视频源分类页
+func handleLatest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, fmt.Sprintf("不支持的请求方法: %s", r.Method), http.StatusMethodNotAllowed)
+		return
+	}
+	if infos.UserClient == nil || infos.Status.Load() != 3 {
+		http.Error(w, "userBot 未登录, 无法读取频道最新资源", http.StatusUnauthorized)
+		return
+	}
+	params := r.URL.Query()
+	if err := checkPass(params); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	page, err := strconv.Atoi(params.Get("page"))
+	if err != nil || page <= 0 {
+		page = 1
+	}
+
+	limit, err := strconv.Atoi(params.Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	offset, err := strconv.ParseInt(params.Get("offset"), 10, 32)
+	if err != nil || offset <= 0 {
+		offset = 0
+	}
+
+	infos.Mutex.RLock()
+	configured := make([]string, len(infos.Conf.Channels))
+	copy(configured, infos.Conf.Channels)
+	infos.Mutex.RUnlock()
+
+	channelParam := cleanChannelID(params.Get("channel"))
+	channels := make([]string, 0, len(configured))
+	for _, channel := range configured {
+		id := cleanChannelID(channel)
+		if id == "" {
+			continue
+		}
+		if channelParam == "" || strings.EqualFold(channelParam, "all") || strings.EqualFold(channelParam, id) {
+			channels = append(channels, id)
+		}
+	}
+	if len(channels) == 0 {
+		http.Error(w, "频道未配置或不存在", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	count := atomic.Int64{}
+	results := make(chan Items, len(channels))
+	var workerPool sync.WaitGroup
+
+	maxCount := int64(2 * infos.Conf.Workers)
+	if maxCount == 0 {
+		maxCount = 3
+	}
+
+	for _, channel := range channels {
+		infos.Cond.L.Lock()
+		for count.Load() >= maxCount {
+			infos.Cond.Wait()
+		}
+		infos.Cond.L.Unlock()
+
+		count.Add(1)
+		workerPool.Add(1)
+		go func(channel string) {
+			defer func() {
+				workerPool.Done()
+				count.Add(-1)
+				infos.Cond.L.Lock()
+				infos.Cond.Broadcast()
+				infos.Cond.L.Unlock()
+			}()
+
+			result, err := infos.latest(channel, page, limit, int32(offset))
+			if err != nil {
+				log.Printf("读取最新资源失败: channel=%s, err=%v", channel, err)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case results <- result:
+			}
+		}(channel)
+	}
+
+	go func() {
+		workerPool.Wait()
+		close(results)
+	}()
+
+	var items struct {
+		HasMore bool    `json:"more"`
+		Items   []Items `json:"items"`
+	}
+	items.Items = make([]Items, 0, len(channels))
+
+	defer func() {
+		content, err := json.Marshal(items)
+		if err != nil {
+			log.Printf("JSON序列化失败: %+v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodHead {
+			return
+		}
+		n, err := w.Write(content)
+		if err != nil {
+			log.Printf("写入长度 %d 的响应体失败: %+v", n, err)
 		}
 	}()
 
