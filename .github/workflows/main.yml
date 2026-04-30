@@ -3,7 +3,7 @@ name: build TGFileBot
 on:
   push:
     branches: [main]
-    tags: ['v*', '*.*.*']
+    tags: ['v*.*.*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -63,9 +63,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
             type=ref,event=tag
-            type=sha,format=short
 
       - name: Build and Push
         uses: docker/build-push-action@v6
