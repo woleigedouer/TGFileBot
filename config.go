@@ -1,12 +1,18 @@
 package main
 
 import (
+	_ "embed"       // 用于内嵌默认配置模板
 	"encoding/json" // 用于解析 JSON 配置文件
+	"errors"        // 用于判断文件错误类型
+	"fmt"           // 用于格式化错误信息
 	"io"            // 用于读取文件内容
 	"log"           // 用于日志记录
 	"os"            // 用于文件操作
 	"path/filepath" // 用于处理文件路径
 )
+
+//go:embed files/config.json.example
+var defaultConfigJSON []byte
 
 // Conf 结构体定义了程序运行所需的各项配置参数
 // 通过 json 标签与 config.json 文件进行映射
@@ -37,6 +43,13 @@ func loadConf(filesPath string) (*Conf, error) {
 	// 打开配置文件
 	file, err := os.Open(confPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if createErr := createDefaultConf(confPath); createErr != nil {
+				log.Printf("生成 config.json 模板失败: %+v", createErr)
+				return nil, createErr
+			}
+			return nil, fmt.Errorf("config.json 不存在, 已生成模板: %s, 请填写必要配置后重新启动", confPath)
+		}
 		log.Printf("打开 config.json 文件错误: %+v", err)
 		return nil, err
 	}
@@ -62,6 +75,14 @@ func loadConf(filesPath string) (*Conf, error) {
 	}
 
 	return &conf, nil // 返回解析后的配置对象
+}
+
+// createDefaultConf 在配置目录中生成默认 config.json 模板。
+func createDefaultConf(confPath string) error {
+	if err := os.MkdirAll(filepath.Dir(confPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(confPath, defaultConfigJSON, 0644)
 }
 
 // saveConf 将当前的配置信息序列化并保存到 config.json 文件中

@@ -1,6 +1,7 @@
 .git
 .github
-files
+files/*
+!files/config.json.example
 *.log
 *.session
 *.session-journal

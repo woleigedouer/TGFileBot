@@ -6,4 +6,5 @@ services:
     ports:
       - "9981:8080"
     volumes:
+      # 首次启动会自动生成 ./files/config.json 模板，请填写后重启容器。
       - ./files:/root/files
