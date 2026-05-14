@@ -523,10 +523,10 @@ func (stream *Stream) warmConnection(ctx context.Context) error {
 			log.Printf("重连 TCP 后验证失败: %+v", err)
 			return err
 		} else {
-			log.Printf("TCP 链路已恢复, 延迟: %.2fs", value.Seconds())
+			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
 		}
 	}
-	
-	log.Printf("TCP 链路正常, 延迟: %.2fs", latenc.Seconds())
+
+	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
 	return nil
 }
