@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -501,14 +500,10 @@ func (infos *Infos) wakeTCP() error {
 		return errors.New("infos.Client 不能为 nil")
 	}
 
-	// 设置较短超时
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	// 最轻量探活 RPC
-	latenc, err := infos.Client.Ping(ctx)
-	if err != nil {
-		log.Printf("TCP 链路异常, 正在重连: %+v", err)
+	latency := infos.Client.Ping()
+	if latency <= 0 {
+		log.Printf("TCP 链路异常, 正在重连")
 		// 强制断开
 		if err := infos.Client.Disconnect(); err != nil {
 			log.Printf("强制断开 TCP 连接失败: %+v", err)
@@ -519,15 +514,15 @@ func (infos *Infos) wakeTCP() error {
 			return err
 		}
 		// 重连后再次验证
-		if value, err := infos.Client.Ping(ctx); err != nil {
-			log.Printf("重连 TCP 后验证失败: %+v", err)
-			return err
+		if value := infos.Client.Ping(); value <= 0 {
+			log.Printf("重连 TCP 后验证失败")
+			return fmt.Errorf("TCP ping failed after reconnect")
 		} else {
 			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
 		}
 	}
 
-	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
+	log.Printf("TCP 链路正常, 延迟: %dms", latency.Milliseconds())
 	return nil
 }
 
