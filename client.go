@@ -481,6 +481,20 @@ func (infos *Infos) pass() (pass string, err error) {
 	}
 }
 
+// submitPass 接收用户通过 Bot 发送的 2FA 密码并写入通道
+func (infos *Infos) submitPass(pass string) (err error) {
+	infos.Mutex.Lock()
+	defer infos.Mutex.Unlock()
+
+	if infos.Status.Load() != 2 {
+		err = errors.New("当前状态不是等待2FA密码")
+		sendMS(nil, err.Error(), nil, 60)
+		return err
+	}
+	infos.Pass <- pass
+	return nil
+}
+
 // wakeTCP 预热连接，防止冷启动卡死
 func (infos *Infos) wakeTCP() error {
 	if infos.Client == nil {
@@ -514,21 +528,6 @@ func (infos *Infos) wakeTCP() error {
 	}
 
 	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
-	return nil
-}
-
-
-// submitPass 接收用户通过 Bot 发送的 2FA 密码并写入通道
-func (infos *Infos) submitPass(pass string) (err error) {
-	infos.Mutex.Lock()
-	defer infos.Mutex.Unlock()
-
-	if infos.Status.Load() != 2 {
-		err = errors.New("当前状态不是等待2FA密码")
-		sendMS(nil, err.Error(), nil, 60)
-		return err
-	}
-	infos.Pass <- pass
 	return nil
 }
 
@@ -571,6 +570,6 @@ func botConf(cate string) (conf telegram.ClientConfig) {
 		} else {
 			log.Printf("代理地址解析失败: %v", err)
 		}
-	}	
+	}
 	return conf
 }
