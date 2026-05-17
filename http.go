@@ -267,6 +267,13 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		infos.Client = infos.BotClient
 	}
 
+	// 唤醒TCP连接
+	go func() {
+		if err := infos.wakeTCP(); err != nil {
+			log.Printf("唤醒 TCP 连接失败: %+v", err)
+		}
+	}()
+
 	// 4. 从 Telegram 获取指定消息
 	ms, err := infos.Client.GetMessages(cid, &telegram.SearchOption{IDs: []int32{mid}})
 	if err != nil || len(ms) == 0 {
@@ -321,6 +328,11 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPartialContent)
 	}
 
+	// 提前发送 Header，重置客户端(ExoPlayer)连接超时倒计时
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
 	log.Printf("开始下载: cid=%d, mid=%d, name=%s, start=%d, end=%d", cid, mid, fileName, start, end)
 
 	// 如果是 HEAD 请求, 只返回首部信息后提早结束避免开启流媒体下载协程
@@ -333,9 +345,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// 9. 启动并发下载协程
 	go stream.start(start, end)
-	defer func() {
-		go stream.clean()
-	}() // 结束时清理
+	defer stream.clean() // 结束时清理
 
 	// 10. 循环从下载管道读取分片并写入 HTTP 响应体
 	if r.Method == http.MethodGet {
@@ -354,29 +364,36 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 					log.Printf("流式传输文件出错: cid=%d, mid=%d, name=%s, error=任务为空", cid, mid, fileName)
 					continue
 				}
+
+				if task.Error != nil {
+					log.Printf("切片下载出错: cid=%d, mid=%d, start=%d, end=%d, name=%s, error=%+v", cid, mid, task.ContentStart, task.ContentEnd, fileName, task.Error)
+					return
+				}
 				// 等待任务完成或者客户端断开
 				select {
 				case <-r.Context().Done():
 					log.Printf("流式传输文件已取消: cid=%d, mid=%d, name=%s", cid, mid, fileName)
 					return
-				case <-task.Done:
-					if task.Error != nil {
-						log.Printf("切片下载出错: cid=%d, mid=%d, start=%d, end=%d, name=%s, error=%+v", cid, mid, task.ContentStart, task.ContentEnd, fileName, task.Error)
+				case content, ok := <-task.Content:
+					if !ok {
+						log.Printf("流式传输文件已完成: cid=%d, mid=%d, name=%s", cid, mid, fileName)
 						return
 					}
 
 					// 写入响应
-					if _, err := w.Write(task.Content); err != nil {
-						log.Printf("写入文件流时出错: cid=%d, mid=%d, err=%v", cid, mid, err)
-						return
+					if len(content) > 0 {
+						if _, err := w.Write(content); err != nil {
+							log.Printf("写入文件流时出错: cid=%d, mid=%d, name=%s, err=%v", cid, mid, fileName, err)
+							return
+						}
 					}
-
 					// 检查是否已经写完当前请求的所有范围
 					if task.ContentEnd >= end {
-						log.Printf("流式传输文件已完成: cid=%d, mid=%d", cid, mid)
+						log.Printf("流式传输文件已完成: cid=%d, mid=%d, name=%s", cid, mid, fileName)
 						return
 					}
 					task = nil
+					content = nil
 					timer.Reset(30 * time.Second)
 				}
 			case <-timer.C:

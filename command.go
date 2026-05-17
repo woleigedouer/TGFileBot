@@ -270,6 +270,36 @@ func handleBotCommand(m *telegram.NewMessage) error {
 			}
 			sendMS(m, src, nil, 60)
 			return nil
+		case strings.HasPrefix(text, "/proxy"):
+			if !infos.isAdmin(m.SenderID()) {
+				sendMS(m, "你没有使用此命令的权限", nil, 60)
+				return nil
+			}
+			content := strings.TrimSpace(strings.TrimPrefix(text, "/proxy"))
+			if content == "" {
+				if infos.Conf.Proxy == "" {
+					sendMS(m, "当前未设置代理", nil, 60)
+					return nil
+				} else {
+					sendMS(m, fmt.Sprintf("当前代理: %s", infos.Conf.Proxy), nil, 60)
+					return nil
+				}
+			}
+			if content == "off" {
+				content = ""
+			}
+			if _, err := telegram.ProxyFromURL(content); err != nil {
+				sendMS(m, "代理地址格式错误", nil, 60)
+				return nil
+			}
+			infos.Mutex.Lock()
+			infos.Conf.Proxy = content
+			if err := saveConf(infos.Conf, infos.FilesPath); err != nil {
+				log.Printf("保存配置文件失败: %+v", err)
+			}
+			infos.Mutex.Unlock()
+			sendMS(m, fmt.Sprintf("代理已设置为: %s", content), nil, 60)
+			return nil
 		case strings.HasPrefix(text, "/password"):
 			if !infos.isAdmin(m.SenderID()) {
 				sendMS(m, "你没有使用此命令的权限", nil, 60)

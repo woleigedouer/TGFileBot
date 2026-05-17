@@ -107,6 +107,7 @@ docker run -d --name tgfilebot -p 8080:8080 -v $(pwd)/files:/root/files tgfilebo
 | `/code <验证码>`        | 提交手机验证码（需混入非数字字符，详见注意事项）  | 主管理员 |
 | `/pass <密码>`         | 提交账号的二次验证（2FA）密码           | 主管理员 |
 | `/password <key>`    | 设置当前账号的密码                  | 管理员  |
+| `/proxy <URL>`         | 设置代理 (支持 SOCKS、HTTP、MTProxy 和 TG 协议, off 命令关闭代理) | 管理员  |
 | `/dc <ID>`           | 指定 UserBot 的DC             | 管理员  |
 | `/allow <ID>`        | 将特定用户 ID 添加到白名单            | 管理员  |
 | `/disallow <ID>`     | 从白名单中移除特定用户                | 管理员  |
@@ -142,7 +143,7 @@ docker run -d --name tgfilebot -p 8080:8080 -v $(pwd)/files:/root/files tgfilebo
   "message": "服务器正在运行。",
   "ok": true,
   "uptime": "1d 2h 3m 4s",
-  "version": "v1.0.5"
+  "version": "v1.0.10"
 }
 ```
 
@@ -303,10 +304,3 @@ UserBot 带来的潜在风险。**
 ## 许可证
 
 本项目遵循 [MIT](LICENSE) 许可。
-
-## Changelog / 更新日志
-- **v1.0.1**
-  - **稳定性:** 修复并发下载中 `stream.Src` 读取的 Data Race 问题。
-  - **内存优化:** 修复 `clean()` 中 `time.After` 造成的潜在 Timer 内存泄漏。
-  - **容错增强:** 对普通网络错误加入指数退避 (Exponential Backoff) 重试策略。
-  - **重构:** `http.go` 核心请求解析逻辑抽离，提升可维护性。

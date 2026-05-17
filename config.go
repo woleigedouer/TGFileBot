@@ -19,6 +19,7 @@ type Conf struct {
 	Site      string   `json:"site"`                // 反代域名, 用于生成公开访问链接
 	AppHash   string   `json:"hash"`                // Telegram API Hash, 从 my.telegram.org 获取
 	BotToken  string   `json:"botToken"`            // Telegram Bot Token, 用于交互和管理
+	Proxy     string   `json:"proxy,omitempty"`     // 代理服务器地址, 用于连接 Telegram
 	Password  string   `json:"password,omitempty"`  // 访问 /link 接口时可选的身份验证密码
 	Channels  []string `json:"channels,omitempty"`  // 频道列表, 用于搜索
 	DC        int      `json:"dc,omitempty"`        // 指定连接的 Telegram 数据中心 (Data Center) ID

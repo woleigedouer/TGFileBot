@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -128,6 +129,10 @@ func (infos *Infos) startBot() (err error) {
 			{
 				Command:     "port",
 				Description: "设置HTTP服务端口",
+			},
+			{
+				Command:     "proxy",
+				Description: "设置代理",
 			},
 			{
 				Command:     "check",
@@ -490,9 +495,45 @@ func (infos *Infos) submitPass(pass string) (err error) {
 	return nil
 }
 
+// wakeTCP 预热连接，防止冷启动卡死
+func (infos *Infos) wakeTCP() error {
+	if infos.Client == nil {
+		return errors.New("infos.Client 不能为 nil")
+	}
+
+	// 设置较短超时
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 最轻量探活 RPC
+	latenc, err := infos.Client.Ping(ctx)
+	if err != nil {
+		log.Printf("TCP 链路异常, 正在重连: %+v", err)
+		// 强制断开
+		if err := infos.Client.Disconnect(); err != nil {
+			log.Printf("强制断开 TCP 连接失败: %+v", err)
+		}
+		// 重连
+		if err := infos.Client.Connect(); err != nil {
+			log.Printf("重连 TCP 失败: %+v", err)
+			return err
+		}
+		// 重连后再次验证
+		if value, err := infos.Client.Ping(ctx); err != nil {
+			log.Printf("重连 TCP 后验证失败: %+v", err)
+			return err
+		} else {
+			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
+		}
+	}
+
+	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
+	return nil
+}
+
 // botConf 构造 Telegram 客户端所需的通用配置
 func botConf(cate string) (conf telegram.ClientConfig) {
-	return telegram.ClientConfig{
+	conf = telegram.ClientConfig{
 		AppID:        infos.Conf.AppID,
 		AppHash:      infos.Conf.AppHash,
 		LogLevel:     telegram.LogError,
@@ -523,4 +564,13 @@ func botConf(cate string) (conf telegram.ClientConfig) {
 			return false
 		},
 	}
+	if infos.Conf.Proxy != "" {
+		proxy, err := telegram.ProxyFromURL(infos.Conf.Proxy)
+		if err == nil {
+			conf.Proxy = proxy
+		} else {
+			log.Printf("代理地址解析失败: %v", err)
+		}
+	}
+	return conf
 }
