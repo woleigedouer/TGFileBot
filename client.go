@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -479,6 +480,43 @@ func (infos *Infos) pass() (pass string, err error) {
 		return "", err
 	}
 }
+
+// wakeTCP 预热连接，防止冷启动卡死
+func (infos *Infos) wakeTCP() error {
+	if infos.Client == nil {
+		return errors.New("infos.Client 不能为 nil")
+	}
+
+	// 设置较短超时
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 最轻量探活 RPC
+	latenc, err := infos.Client.Ping(ctx)
+	if err != nil {
+		log.Printf("TCP 链路异常, 正在重连: %+v", err)
+		// 强制断开
+		if err := infos.Client.Disconnect(); err != nil {
+			log.Printf("强制断开 TCP 连接失败: %+v", err)
+		}
+		// 重连
+		if err := infos.Client.Connect(); err != nil {
+			log.Printf("重连 TCP 失败: %+v", err)
+			return err
+		}
+		// 重连后再次验证
+		if value, err := infos.Client.Ping(ctx); err != nil {
+			log.Printf("重连 TCP 后验证失败: %+v", err)
+			return err
+		} else {
+			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
+		}
+	}
+
+	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
+	return nil
+}
+
 
 // submitPass 接收用户通过 Bot 发送的 2FA 密码并写入通道
 func (infos *Infos) submitPass(pass string) (err error) {

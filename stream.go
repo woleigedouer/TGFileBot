@@ -126,8 +126,8 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 		if stream.Init.CompareAndSwap(false, true) {
 			maxWait = 4
 			chunkSize = 128 * 1024
-
 		}
+		
 		stream.Mutex.Lock()
 		task := newTask()
 		// 计算当前任务的下载范围
@@ -175,7 +175,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 		if task.ContentStart < int64(1048576) || (contentEnd-task.ContentEnd)/contentEnd*1000 < 2 {
 			maxCount = 6
 		}
-		
+
 		for num := 1; num <= maxCount; num++ {
 			// 从缓存读取
 			found := stream.handleCache(task, cacheKey, offset, contentEnd)
@@ -496,40 +496,4 @@ func (stream *Stream) handleCache(task *Task, cacheKey string, offset, contentEn
 		}
 	}
 	return false
-}
-
-// warmConnection 预热连接，防止冷启动卡死
-func (stream *Stream) warmConnection(ctx context.Context) error {
-	if stream.Client == nil {
-		return errors.New("stream.Client 不能为 nil")
-	}
-
-	// 设置较短超时
-	warmCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	// 最轻量探活 RPC
-	latenc, err := stream.Client.Ping(warmCtx)
-	if err != nil {
-		log.Printf("TCP 链路异常, 正在重连: %+v", err)
-		// 强制断开
-		if err := stream.Client.Disconnect(); err != nil {
-			log.Printf("强制断开 TCP 连接失败: %+v", err)
-		}
-		// 重连
-		if err := stream.Client.Connect(); err != nil {
-			log.Printf("重连 TCP 失败: %+v", err)
-			return err
-		}
-		// 重连后再次验证
-		if value, err := stream.Client.Ping(warmCtx); err != nil {
-			log.Printf("重连 TCP 后验证失败: %+v", err)
-			return err
-		} else {
-			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
-		}
-	}
-
-	log.Printf("TCP 链路正常, 延迟: %dms", latenc.Milliseconds())
-	return nil
 }
