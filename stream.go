@@ -94,8 +94,6 @@ func newStream(ctx context.Context, client *telegram.Client, media telegram.Mess
 		Mutex:        new(sync.Mutex),
 		TaskStart:    new(int64),
 		TaskEnd:      new(int64),
-		Count:        atomic.Int64{},
-		Version:      atomic.Int64{},
 	}
 }
 
@@ -127,7 +125,7 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 			maxWait = 4
 			chunkSize = 128 * 1024
 		}
-		
+
 		stream.Mutex.Lock()
 		task := newTask()
 		// 计算当前任务的下载范围

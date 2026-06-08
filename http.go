@@ -493,7 +493,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	count := atomic.Int64{}
+	var count atomic.Int64
 	infos.Mutex.RLock() // 加锁保护读取过程
 	channels := make([]string, len(infos.Conf.Channels))
 	copy(channels, infos.Conf.Channels)

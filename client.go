@@ -519,6 +519,7 @@ func (infos *Infos) wakeTCP() error {
 			return fmt.Errorf("TCP ping failed after reconnect")
 		} else {
 			log.Printf("TCP 链路已恢复, 延迟: %dms", value.Milliseconds())
+			return nil
 		}
 	}
 
