@@ -267,12 +267,10 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		infos.Client = infos.BotClient
 	}
 
-	// 唤醒TCP连接
-	go func() {
-		if err := infos.wakeTCP(); err != nil {
-			log.Printf("唤醒 TCP 连接失败: %+v", err)
-		}
-	}()
+	// 唤醒TCP连接（同步等待），确保重连完成后再发起消息请求
+	if err := infos.wakeTCP(); err != nil {
+		log.Printf("唤醒 TCP 连接失败: %+v", err)
+	}
 
 	// 4. 从 Telegram 获取指定消息
 	ms, err := infos.Client.GetMessages(cid, &telegram.SearchOption{IDs: []int32{mid}})

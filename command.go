@@ -843,7 +843,7 @@ func sendMS(m *telegram.NewMessage, src any, params *telegram.SendOptions, wait 
 		if err != nil {
 			log.Printf("发送消息失败: %+v", err)
 		}
-		if len(wait) > 0 && wait[0] > 0 {
+		if len(wait) > 0 && wait[0] > 0 && ms != nil {
 			go func() {
 				time.Sleep(time.Duration(wait[0]) * time.Second)
 				if _, err = ms.Delete(); err != nil {

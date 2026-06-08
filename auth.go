@@ -76,11 +76,11 @@ func (infos *Infos) checkHash(hash string) int64 {
 	}
 
 	for key, value := range infos.IDs {
-		switch value.Hash {
-		case "":
+		if value.Hash == "" {
 			value.Hash = infos.calculateHash(key)
 			infos.IDs[key] = value
-		case hash:
+		}
+		if value.Hash == hash {
 			return key
 		}
 	}

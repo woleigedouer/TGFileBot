@@ -163,8 +163,8 @@ func cleanFiles(realm CleanRealm) {
 	}
 }
 
-// isDigit 判断 rune 是否为数字字符（供 submitCode 过滤验证码使用）
-func isDigit(r rune) bool {
+// isNumber 判断 rune 是否为数字字符（供 submitCode 过滤验证码使用）
+func isNumber(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 

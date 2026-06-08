@@ -115,7 +115,7 @@ type Infos struct {
 var infos *Infos
 var offSets *OffSets
 var startTime time.Time
-var version = "v1.0.10"
+var version = "v1.0.11"
 
 // main 是程序的入口函数
 func main() {
@@ -373,15 +373,13 @@ func newInfos(filePath, filesPath string) (*Infos, error) {
 		TailCache: make(map[string]*MediaCache, 4),
 		Rex:       regexp.MustCompile(`(?i)(?:FLOOD(?:_PREMIUM)?_WAIT_(\d+)|WAIT(?:\s+OF)?\s*(\d+))`),
 	}
-	// 启动配置自动保存监听
-	//go infos.watchConf()
 
 	// 创建日志文件
 	if filePath != "" {
 		filePath = filepath.Clean(filePath)
 		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
-			log.Printf("无法打开日志文件: %v", err)
+			log.Printf("无法打开日志文件: %+v", err)
 		}
 		infos.File = file
 		// 设置日志输出

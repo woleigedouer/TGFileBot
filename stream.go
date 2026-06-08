@@ -146,23 +146,25 @@ func (stream *Stream) download(numTask int, contentStart, contentEnd int64) {
 		}
 
 		// 将任务推入管道供下游消费（HTTP 响应层）
+		// 同时监听 ctx.Done，防止 clean() 置 nil Tasks 后协程永久阻塞
 		select {
 		case <-stream.Ctx.Done():
 			stream.Mutex.Unlock()
 			return
+		case stream.Tasks <- task:
+			// 成功发送任务
 		default:
+			// 任务队列已满, 这里保持阻塞直到能存入或取消
+			log.Printf("任务队列已满: cid=%d, mid=%d, name=%s", stream.CID, stream.MID, stream.FileName)
 			select {
 			case <-stream.Ctx.Done():
 				stream.Mutex.Unlock()
 				return
 			case stream.Tasks <- task:
 				// 成功发送任务
-			default:
-				// 任务队列已满, 这里保持阻塞直到能存入或取消
-				log.Printf("任务队列已满: cid=%d, mid=%d, name=%s", stream.CID, stream.MID, stream.FileName)
-				stream.Tasks <- task
 			}
 		}
+
 		// 更新流的状态, 为下一个任务做准备
 		*stream.TaskStart = task.ContentEnd + 1
 		*stream.TaskEnd = *stream.TaskStart + chunkSize - 1
